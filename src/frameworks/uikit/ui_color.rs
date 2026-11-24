@@ -208,6 +208,11 @@ pub const CLASSES: ClassExports = objc_classes! {
     env.objc.borrow::<UIColorHostObject>(this).cg_color
 }
 
+- (())encodeWithCoder:(id)_coder {
+    // UIColor conforms to NSCoding; its state is the CGColor, which is
+    // rebuilt from the same component values by -initWithCoder:.
+}
+
 - (())dealloc {
     let color = env.objc.borrow_mut::<UIColorHostObject>(this).cg_color;
     CGColorRelease(env, color);

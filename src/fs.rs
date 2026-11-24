@@ -299,6 +299,11 @@ pub fn resolve_path<'a>(path: &'a GuestPath, relative_to: Option<&'a GuestPath>)
         apply_path_component(&mut components, component);
     }
 
+    // iOS frameworks can return canonical /private paths for these trees.
+    if let ["private", "var" | "etc" | "tmp", ..] = components.as_slice() {
+        components.remove(0);
+    }
+
     log_dbg!("=> {:?}", components);
 
     components
