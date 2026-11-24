@@ -7,13 +7,6 @@ package org.podroid.android;
 
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.graphics.Canvas;
-import android.graphics.Color;
-import android.graphics.LinearGradient;
-import android.graphics.Paint;
-import android.graphics.Rect;
-import android.graphics.RectF;
-import android.graphics.Shader;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -31,21 +24,15 @@ import org.json.JSONObject;
 
 /**
  * Posters for the launcher's games: box art from IGDB for the games in
- * [#IGDB], or from Wikipedia where a game has an article with one, or else
- * one made from the game's iTunesArtwork (the App Store artwork in its IPA)
- * or icon.
- *
- * Downloaded posters are kept in Podroid_posters, and games without one are
- * looked up again after a week. Posters are portrait, like box art (3:4).
+ * [#IGDB], from Wikipedia where a game has an article with one, or from
+ * the game's iTunesArtwork. Downloaded posters are kept in Podroid_posters,
+ * and games without one are looked up again after a week.
  */
 final class Posters {
     private Posters() {}
 
     static final String DIR = "Podroid_posters";
-    /// Width and height of drawn posters, in the same 3:4 shape as the cards
-    /// (and most IGDB covers, so they aren't cropped).
-    static final int WIDTH = 450;
-    static final int HEIGHT = 600;
+    private static final int THUMBNAIL_SIZE = 450;
 
     private static final long RETRY_MS = 7L * 24 * 60 * 60 * 1000;
     private static final int MAX_DOWNLOAD = 4 << 20;
@@ -185,7 +172,7 @@ final class Posters {
     private static String pageImage(String language, String title, String userAgent)
             throws Exception {
         JSONObject result = api(language, "action=query&prop=pageimages&piprop=thumbnail"
-            + "&pithumbsize=" + WIDTH + "&pilicense=any&redirects=1&titles="
+            + "&pithumbsize=" + THUMBNAIL_SIZE + "&pilicense=any&redirects=1&titles="
             + URLEncoder.encode(title, "UTF-8"), userAgent);
         JSONObject pages = result.getJSONObject("query").getJSONObject("pages");
         JSONObject page = pages.getJSONObject(pages.keys().next());
@@ -229,34 +216,18 @@ final class Posters {
         }
     }
 
-    /**
-     * A poster made from the game's iTunesArtwork, the 512×512 App Store
-     * artwork many IPAs include: the artwork at the top, running into a
-     * blurred, darkened stretch of itself below.
-     */
     static Bitmap fromArtwork(String ipaPath) {
         Bitmap art = readArtwork(ipaPath);
         if (art == null) {
             return null;
         }
-        Bitmap poster = Bitmap.createBitmap(WIDTH, HEIGHT, Bitmap.Config.ARGB_8888);
-        Canvas canvas = new Canvas(poster);
-        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
-        canvas.drawBitmap(blurredCover(art), 0, 0, paint);
-        darken(canvas, 0x40000000, 0xB0000000);
-
-        // The artwork, fading out over its bottom quarter.
-        Bitmap top = Bitmap.createBitmap(WIDTH, WIDTH, Bitmap.Config.ARGB_8888);
-        Canvas topCanvas = new Canvas(top);
-        topCanvas.drawBitmap(art, null, new Rect(0, 0, WIDTH, WIDTH), paint);
-        Paint fade = new Paint();
-        fade.setShader(new LinearGradient(0, WIDTH * 0.72f, 0, WIDTH, Color.BLACK,
-            Color.TRANSPARENT, Shader.TileMode.CLAMP));
-        fade.setXfermode(new android.graphics.PorterDuffXfermode(
-            android.graphics.PorterDuff.Mode.DST_IN));
-        topCanvas.drawRect(0, 0, WIDTH, WIDTH, fade);
-        canvas.drawBitmap(top, 0, 0, null);
-        return poster;
+        int longestEdge = Math.max(art.getWidth(), art.getHeight());
+        if (longestEdge <= THUMBNAIL_SIZE) {
+            return art;
+        }
+        float scale = THUMBNAIL_SIZE / (float) longestEdge;
+        return Bitmap.createScaledBitmap(art, Math.max(1, Math.round(art.getWidth() * scale)),
+            Math.max(1, Math.round(art.getHeight() * scale)), true);
     }
 
     /// The iTunesArtwork at the root of an IPA (outside its app bundle), if
@@ -294,112 +265,5 @@ final class Posters {
             // Not a valid zip; no artwork.
         }
         return null;
-    }
-
-    /**
-     * Draws a poster from the game's icon, for games without box art or
-     * iTunesArtwork: the icon, large, over a blurred close-up of it. The game's name is shown under the poster, so it's not repeated.
-     */
-    static Bitmap generate(Bitmap icon) {
-        Bitmap poster = Bitmap.createBitmap(WIDTH, HEIGHT, Bitmap.Config.ARGB_8888);
-        Canvas canvas = new Canvas(poster);
-        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
-        if (icon == null) {
-            paint.setShader(new LinearGradient(0, 0, 0, HEIGHT, 0xFF3D5A80, 0xFF141B2B,
-                Shader.TileMode.CLAMP));
-            canvas.drawRect(0, 0, WIDTH, HEIGHT, paint);
-            return poster;
-        }
-        canvas.drawBitmap(blurredCover(opaque(icon)), 0, 0, paint);
-        darken(canvas, 0x30000000, 0xB0000000);
-        drawIcon(canvas, icon, WIDTH * 0.62f, HEIGHT * 0.45f, paint);
-        return poster;
-    }
-
-    /// Draws a (rounded) icon centred at (centerX, centerY), with a shadow.
-    private static void drawIcon(Canvas canvas, Bitmap icon, float size, float centerY,
-            Paint paint) {
-        RectF rect = new RectF((WIDTH - size) / 2, centerY - size / 2,
-            (WIDTH + size) / 2, centerY + size / 2);
-        Paint shadow = new Paint(Paint.ANTI_ALIAS_FLAG);
-        shadow.setColor(0x73000000);
-        float radius = size * 10f / 57f;
-        canvas.drawRoundRect(new RectF(rect.left + 2, rect.top + 8, rect.right - 2,
-            rect.bottom + 10), radius, radius, shadow);
-        canvas.drawBitmap(icon, null, rect, paint);
-    }
-
-    /// Darkens a poster towards the bottom, and a little at the edges, so the
-    /// picture stands out and the card sits well among the others.
-    private static void darken(Canvas canvas, int top, int bottom) {
-        Paint paint = new Paint();
-        paint.setShader(new LinearGradient(0, 0, 0, HEIGHT, top, bottom,
-            Shader.TileMode.CLAMP));
-        canvas.drawRect(0, 0, WIDTH, HEIGHT, paint);
-        paint.setShader(new android.graphics.RadialGradient(WIDTH / 2f, HEIGHT * 0.45f,
-            HEIGHT * 0.75f, Color.TRANSPARENT, 0x66000000, Shader.TileMode.CLAMP));
-        canvas.drawRect(0, 0, WIDTH, HEIGHT, paint);
-    }
-
-    /// The icon on black, without its transparent rounded corners, so the
-    /// corners don't blur into dark smudges.
-    private static Bitmap opaque(Bitmap icon) {
-        int inset = Math.round(icon.getWidth() * 0.12f);
-        Rect middle = new Rect(inset, inset, icon.getWidth() - inset, icon.getHeight() - inset);
-        Bitmap out = Bitmap.createBitmap(middle.width(), middle.height(),
-            Bitmap.Config.ARGB_8888);
-        new Canvas(out).drawBitmap(icon, middle, new Rect(0, 0, out.getWidth(),
-            out.getHeight()), null);
-        return out;
-    }
-
-    /// The picture cropped to fill a poster, heavily blurred.
-    private static Bitmap blurredCover(Bitmap picture) {
-        // Blur a small copy, then scale it up smoothly.
-        final int smallWidth = WIDTH / 10;
-        final int smallHeight = HEIGHT / 10;
-        float scale = Math.max(smallWidth / (float) picture.getWidth(),
-            smallHeight / (float) picture.getHeight());
-        float width = picture.getWidth() * scale;
-        float height = picture.getHeight() * scale;
-        Bitmap small = Bitmap.createBitmap(smallWidth, smallHeight, Bitmap.Config.ARGB_8888);
-        Paint paint = new Paint(Paint.FILTER_BITMAP_FLAG);
-        new Canvas(small).drawBitmap(picture, null, new RectF((smallWidth - width) / 2,
-            (smallHeight - height) / 2, (smallWidth + width) / 2,
-            (smallHeight + height) / 2), paint);
-        int[] pixels = new int[smallWidth * smallHeight];
-        small.getPixels(pixels, 0, smallWidth, 0, 0, smallWidth, smallHeight);
-        for (int pass = 0; pass < 3; pass++) {
-            boxBlur(pixels, smallWidth, smallHeight, 2);
-        }
-        small.setPixels(pixels, 0, smallWidth, 0, 0, smallWidth, smallHeight);
-        return Bitmap.createScaledBitmap(small, WIDTH, HEIGHT, true);
-    }
-
-    /// One horizontal and one vertical box blur pass, in place.
-    private static void boxBlur(int[] pixels, int width, int height, int radius) {
-        int[] tmp = new int[pixels.length];
-        blurLine(pixels, tmp, width, height, radius, true);
-        blurLine(tmp, pixels, width, height, radius, false);
-    }
-
-    private static void blurLine(int[] in, int[] out, int width, int height, int radius,
-            boolean horizontal) {
-        int lines = horizontal ? height : width;
-        int length = horizontal ? width : height;
-        for (int line = 0; line < lines; line++) {
-            for (int i = 0; i < length; i++) {
-                int r = 0, g = 0, b = 0, n = 0;
-                for (int j = Math.max(0, i - radius); j <= Math.min(length - 1, i + radius); j++) {
-                    int pixel = in[horizontal ? line * width + j : j * width + line];
-                    r += Color.red(pixel);
-                    g += Color.green(pixel);
-                    b += Color.blue(pixel);
-                    n++;
-                }
-                out[horizontal ? line * width + i : i * width + line] =
-                    Color.rgb(r / n, g / n, b / n);
-            }
-        }
     }
 }

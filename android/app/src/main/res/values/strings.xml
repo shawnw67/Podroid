@@ -243,4 +243,14 @@
         <item quantity="one">Games now run from unpacked files instead of IPAs. %1$d game needs unpacking. Its IPA in this app’s folder is then deleted, and it won’t appear in the list until it’s unpacked.</item>
         <item quantity="other">Games now run from unpacked files instead of IPAs. %1$d games need unpacking. Their IPAs in this app’s folder are then deleted, and they won’t appear in the list until they’re unpacked.</item>
     </plurals>
+    <string name="library_title">Library</string>
+    <string name="library_search">Search games</string>
+    <string name="library_filters">Filter and sort games</string>
+    <string name="library_no_results">No matching games.</string>
+    <string name="settings_display">Display</string>
+    <string name="settings_emulation">Emulation</string>
+    <string name="settings_app">Podroid</string>
+    <string name="game_settings_favorite">Favorite</string>
+    <string name="game_settings_saves">Saves</string>
+    <string name="game_settings_manage">Manage game</string>
 </resources>

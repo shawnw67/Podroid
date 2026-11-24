@@ -36,20 +36,27 @@ import android.os.Bundle;
 import android.provider.DocumentsContract;
 import android.os.ParcelFileDescriptor;
 import android.provider.OpenableColumns;
+import android.text.Editable;
 import android.text.TextUtils;
+import android.text.TextWatcher;
 import android.util.TypedValue;
-import android.view.DisplayCutout;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
 import android.view.WindowManager;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.util.Log;
 import android.widget.BaseAdapter;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.GridView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.PopupMenu;
 import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
@@ -68,6 +75,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BiConsumer;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -179,13 +187,17 @@ public class LauncherActivity extends Activity {
     private static final int TEXT = Color.WHITE;
     private static final int TEXT_DIM = 0xB3FFFFFF;
     private static final int ACCENT = 0xFF3D8BFF;
+    private static final int LIBRARY_BG = 0xFF262626;
+    private static final int SETTINGS_BG = 0xFFF2F2F6;
+    private static final int INK = 0xFF1C1C1E;
+    private static final int INK_DIM = 0xFF606066;
     private static final int WARNING = 0xFFFFC766;
 
     private static class App {
         String path;
         String name;
         Bitmap icon;
-        /// Box art, or one drawn from the icon (see [Posters]).
+        /// Box art or App Store artwork, if available.
         Bitmap poster;
         /// See [Library].
         String key;
@@ -206,9 +218,13 @@ public class LauncherActivity extends Activity {
     private final List<App> allApps = new ArrayList<>();
     private final List<App> apps = new ArrayList<>();
     private FrameLayout continueSlot;
-    private LinearLayout filterBar;
+    private ImageView favoriteFilter;
+    private ImageView libraryMenu;
+    private TextView libraryTitle;
+    private String searchQuery = "";
     private boolean loading = true;
     private QuickOptions quickOptions;
+    private Dialog settingsDialog;
     private Bitmap wallpaper;
 
     private AppAdapter adapter;
@@ -254,6 +270,7 @@ public class LauncherActivity extends Activity {
         if (savedInstanceState != null) {
             saveBundleId = savedInstanceState.getString("saveBundleId");
             saveAppName = savedInstanceState.getString("saveAppName");
+            searchQuery = savedInstanceState.getString("searchQuery", "");
         }
         quickOptions = QuickOptions.load(getBaseDir());
         if (savedInstanceState == null && playFromShortcut(intent)) {
@@ -272,12 +289,12 @@ public class LauncherActivity extends Activity {
         super.onSaveInstanceState(outState);
         outState.putString("saveBundleId", saveBundleId);
         outState.putString("saveAppName", saveAppName);
+        outState.putString("searchQuery", searchQuery);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        hideSystemBars();
         // touchHLE may have just exited (e.g. after a crash, whose log should
         // be pointed out) or files may have been changed elsewhere.
         if (!loading) {
@@ -287,32 +304,11 @@ public class LauncherActivity extends Activity {
     }
 
     @Override
-    public void onWindowFocusChanged(boolean hasFocus) {
-        super.onWindowFocusChanged(hasFocus);
-        if (hasFocus) {
-            hideSystemBars();
-        }
-    }
-
-    @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
-        // The layout differs between portrait and landscape.
         buildUi();
-    }
-
-    @SuppressWarnings("deprecation")
-    private void hideSystemBars() {
-        try {
-            getWindow().getDecorView().setSystemUiVisibility(
-                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                | View.SYSTEM_UI_FLAG_FULLSCREEN
-                | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
-        } catch (Throwable e) {
-            // Not essential.
+        if (settingsDialog != null) {
+            sizeSettingsDialog(settingsDialog.getWindow());
         }
     }
 
@@ -357,9 +353,6 @@ public class LauncherActivity extends Activity {
                 app.poster = Posters.cached(postersDir, app.bundleId, app.name);
                 if (app.poster == null) {
                     app.poster = Posters.fromArtwork(app.path);
-                }
-                if (app.poster == null) {
-                    app.poster = Posters.generate(app.icon);
                 }
                 loadLibraryInfo(app);
                 found.add(app);
@@ -525,102 +518,130 @@ public class LauncherActivity extends Activity {
         return view;
     }
 
+    private GradientDrawable roundedBackground(int color, float radius) {
+        GradientDrawable shape = new GradientDrawable();
+        shape.setColor(color);
+        shape.setCornerRadius(dp(radius));
+        return shape;
+    }
+
+    private enum Glass {
+        NEUTRAL(0x28FFFFFF, 0x1AFFFFFF, 0x28FFFFFF, 0x36FFFFFF),
+        SELECTED(0x56FFFFFF, 0x36FFFFFF, 0x47FFFFFF, 0x44FFFFFF),
+        LIGHT(0xD9FFFFFF, 0x25FFFFFF, 0xFFFFFFFF, 0x201C1C1E),
+        CLEAR(0, 0, 0, 0x40FFFFFF);
+
+        final int top;
+        final int bottom;
+        final int edge;
+        final int ripple;
+
+        Glass(int top, int bottom, int edge, int ripple) {
+            this.top = top;
+            this.bottom = bottom;
+            this.edge = edge;
+            this.ripple = ripple;
+        }
+    }
+
+    private GradientDrawable glassSurface(Glass glass, float radius) {
+        GradientDrawable surface = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+            new int[]{glass.top, glass.bottom});
+        surface.setCornerRadius(dp(radius));
+        surface.setStroke(dp(1), glass.edge);
+        return surface;
+    }
+
+    private Drawable glassButton(Glass glass, float radius) {
+        return new RippleDrawable(ColorStateList.valueOf(glass.ripple),
+            glassSurface(glass, radius), roundedBackground(Color.WHITE, radius));
+    }
+
+    private ImageView iconButton(Drawable icon, int label, Glass glass, View.OnClickListener action) {
+        ImageView button = new ImageView(this);
+        button.setImageDrawable(icon);
+        button.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        button.setPadding(dp(13), dp(13), dp(13), dp(13));
+        button.setBackground(glassButton(glass, 24));
+        button.setContentDescription(getString(label));
+        button.setOnClickListener(action);
+        button.setFocusable(true);
+        return button;
+    }
+
+    @SuppressWarnings("deprecation")
     private void buildUi() {
+        Window window = getWindow();
+        window.setStatusBarColor(LIBRARY_BG);
+        window.setNavigationBarColor(Color.TRANSPARENT);
+        window.setNavigationBarDividerColor(Color.TRANSPARENT);
+        window.setNavigationBarContrastEnforced(false);
+        window.getDecorView().setSystemUiVisibility(
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ? 0
+                : View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false);
+        }
+
         FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(LIBRARY_BG);
         if (wallpaper != null) {
             ImageView background = new ImageView(this);
             background.setImageBitmap(wallpaper);
             background.setScaleType(ImageView.ScaleType.CENTER_CROP);
             root.addView(background, new FrameLayout.LayoutParams(-1, -1));
             View shade = new View(this);
-            shade.setBackgroundColor(0x66000000);
+            shade.setBackgroundColor(0xAA262626);
             root.addView(shade, new FrameLayout.LayoutParams(-1, -1));
-        } else {
-            root.setBackground(new GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                new int[]{0xFF27306B, 0xFF1A3F6E, 0xFF0F6A85}));
         }
 
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
+        content.setFocusableInTouchMode(true);
         root.addView(content, new FrameLayout.LayoutParams(-1, -1));
-        final int pad = dp(isLandscape() ? 20 : 16);
-        content.setPadding(pad, pad, pad, pad);
-        // Keep controls clear of display cutouts and visible system bars.
-        content.setOnApplyWindowInsetsListener((view, insets) -> {
-            int left = 0, top = 0, right = 0, bottom = 0;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                Insets safe = insets.getInsets(
-                    WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
-                left = safe.left;
-                top = safe.top;
-                right = safe.right;
-                bottom = safe.bottom;
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                DisplayCutout cutout = insets.getDisplayCutout();
-                if (cutout != null) {
-                    left = cutout.getSafeInsetLeft();
-                    top = cutout.getSafeInsetTop();
-                    right = cutout.getSafeInsetRight();
-                    bottom = cutout.getSafeInsetBottom();
-                }
-            }
-            view.setPadding(pad + left, pad + top, pad + right, pad + bottom);
-            return insets;
-        });
-
-        // Header: icon, name, hint (and the actions, in landscape)
-        LinearLayout header = new LinearLayout(this);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setGravity(Gravity.CENTER_VERTICAL);
-        ImageView logo = new ImageView(this);
-        logo.setImageResource(BuildConfig.APP_ICON);
-        // Rounded like the app icons (see Bundle::load_icon()).
-        GradientDrawable logoShape = new GradientDrawable();
-        logoShape.setCornerRadius(dp(48) * 10f / 57f);
-        logo.setBackground(logoShape);
-        logo.setClipToOutline(true);
-        header.addView(logo, new LinearLayout.LayoutParams(dp(48), dp(48)));
-        LinearLayout titles = new LinearLayout(this);
-        titles.setOrientation(LinearLayout.VERTICAL);
-        titles.setPadding(dp(12), 0, dp(12), 0);
-        titles.addView(makeText(BuildConfig.APP_NAME, 22, TEXT, true));
-        titles.addView(makeText(getString(R.string.launcher_hint), 13, TEXT_DIM, false));
-        header.addView(titles, new LinearLayout.LayoutParams(0, -2, 1));
-        content.addView(header, new LinearLayout.LayoutParams(-1, -2));
-
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        actions.setGravity(Gravity.CENTER_VERTICAL);
-        int buttonHeight = isLandscape() ? dp(44) : dp(46);
-        actions.addView(makeButton(getString(R.string.import_games), true, v -> startImport()), isLandscape()
-            ? new LinearLayout.LayoutParams(-2, buttonHeight)
-            : new LinearLayout.LayoutParams(0, buttonHeight, 1));
-        ImageView settings = new ImageView(this);
-        settings.setImageDrawable(new GearDrawable(TEXT));
-        settings.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        int iconPadding = (buttonHeight - dp(24)) / 2;
-        settings.setPadding(iconPadding, iconPadding, iconPadding, iconPadding);
-        settings.setBackground(buttonBackground(0x2EFFFFFF, buttonHeight / 2f));
-        settings.setContentDescription(getString(R.string.settings));
-        settings.setOnClickListener(v -> showQuickOptions());
-        LinearLayout.LayoutParams settingsParams =
-            new LinearLayout.LayoutParams(buttonHeight, buttonHeight);
-        settingsParams.leftMargin = dp(10);
-        actions.addView(settings, settingsParams);
-        if (isLandscape()) {
-            header.addView(actions);
+        int pad = dp(isLandscape() ? 24 : 20);
+        content.setPadding(pad, dp(8), pad, dp(8));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            content.setOnApplyWindowInsetsListener((view, insets) -> {
+                Insets safe = insets.getInsets(WindowInsets.Type.systemBars()
+                    | WindowInsets.Type.displayCutout() | WindowInsets.Type.ime());
+                view.setPadding(pad + safe.left, dp(8) + safe.top,
+                    pad + safe.right, dp(8) + safe.bottom);
+                return insets;
+            });
+        } else {
+            content.setOnApplyWindowInsetsListener((view, insets) -> {
+                view.setPadding(pad + insets.getSystemWindowInsetLeft(), dp(8),
+                    pad + insets.getSystemWindowInsetRight(), dp(8) + insets.getSystemWindowInsetBottom());
+                return insets;
+            });
         }
 
+        LinearLayout header = new LinearLayout(this);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        TextView brand = makeText(BuildConfig.APP_NAME, 25, TEXT, true);
+        brand.setSingleLine();
+        brand.setEllipsize(TextUtils.TruncateAt.END);
+        header.addView(brand, new LinearLayout.LayoutParams(0, -2, 1));
+        ImageView settings = iconButton(new GearDrawable(TEXT), R.string.settings,
+            Glass.NEUTRAL, v -> showQuickOptions());
+        header.addView(settings, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        ImageView add = iconButton(new LibraryIcon(Icon.ADD, TEXT), R.string.import_games,
+            Glass.NEUTRAL, v -> startImport());
+        LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(dp(48), dp(48));
+        addParams.setMarginStart(dp(8));
+        header.addView(add, addParams);
+        content.addView(header, new LinearLayout.LayoutParams(-1, -2));
+
         if (lastRunCrashed()) {
-            TextView banner = makeText(
-                getString(R.string.last_run_crashed), 14, 0xFF3A2A00, true);
+            TextView banner = makeText(getString(R.string.last_run_crashed), 14, 0xFF3A2A00, true);
             banner.setGravity(Gravity.CENTER);
             banner.setPadding(dp(14), dp(10), dp(14), dp(10));
             banner.setBackground(buttonBackground(WARNING, dp(12)));
             banner.setOnClickListener(v -> showLog());
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
-            params.topMargin = dp(14);
+            params.topMargin = dp(12);
             content.addView(banner, params);
         }
         updateSlot = new FrameLayout(this);
@@ -629,40 +650,27 @@ public class LauncherActivity extends Activity {
 
         continueSlot = new FrameLayout(this);
         content.addView(continueSlot, new LinearLayout.LayoutParams(-1, -2));
-        android.widget.HorizontalScrollView filterScroll =
-            new android.widget.HorizontalScrollView(this);
-        filterScroll.setHorizontalScrollBarEnabled(false);
-        filterBar = new LinearLayout(this);
-        filterBar.setOrientation(LinearLayout.HORIZONTAL);
-        filterBar.setGravity(Gravity.CENTER_VERTICAL);
-        filterScroll.addView(filterBar);
-        LinearLayout.LayoutParams filterParams = new LinearLayout.LayoutParams(-1, -2);
-        filterParams.topMargin = dp(12);
-        content.addView(filterScroll, filterParams);
+        libraryTitle = makeText("", 14, TEXT_DIM, true);
+        libraryTitle.setAccessibilityHeading(true);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(-1, -2);
+        titleParams.topMargin = dp(isLandscape() ? 10 : 20);
+        content.addView(libraryTitle, titleParams);
 
-        View divider = new View(this);
-        divider.setBackgroundColor(0x33FFFFFF);
-        LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(-1, dp(1));
-        dividerParams.topMargin = dp(14);
-        content.addView(divider, dividerParams);
-
-        // The apps, or a message where there are none
         FrameLayout middle = new FrameLayout(this);
         content.addView(middle, new LinearLayout.LayoutParams(-1, 0, 1));
 
         GridView grid = new GridView(this);
         grid.setNumColumns(GridView.AUTO_FIT);
-        // Tablets get bigger posters, so they don't look lost on the screen.
         boolean tablet = getResources().getConfiguration().smallestScreenWidthDp >= 600;
-        grid.setColumnWidth(dp(tablet ? 190 : 108));
+        grid.setColumnWidth(dp(tablet ? 136 : 90));
         grid.setStretchMode(GridView.STRETCH_COLUMN_WIDTH);
-        grid.setHorizontalSpacing(dp(12));
+        grid.setHorizontalSpacing(dp(14));
         grid.setVerticalSpacing(dp(16));
-        grid.setPadding(0, dp(14), 0, dp(14));
+        grid.setPadding(0, dp(10), 0, dp(12));
         grid.setClipToPadding(false);
         grid.setSelector(new ColorDrawable(Color.TRANSPARENT));
         grid.setVerticalScrollBarEnabled(false);
-        adapter = new AppAdapter();
+        adapter = new AppAdapter(dp(tablet ? 18 : 13));
         grid.setAdapter(adapter);
         grid.setOnItemClickListener((parent, view, position, id) -> launch(apps.get(position)));
         grid.setOnItemLongClickListener((parent, view, position, id) -> {
@@ -676,26 +684,82 @@ public class LauncherActivity extends Activity {
         empty.setGravity(Gravity.CENTER);
         statusText = makeText("", 16, TEXT_DIM, false);
         statusText.setGravity(Gravity.CENTER);
-        statusText.setLineSpacing(0, 1.2f);
         empty.addView(statusText);
-        importBigButton = makeButton(getString(R.string.import_games), true, v -> startImport());
-        LinearLayout.LayoutParams bigParams = new LinearLayout.LayoutParams(dp(200), dp(50));
-        bigParams.topMargin = dp(20);
+        TextView emptyImport = makeButton(getString(R.string.import_games), false, v -> startImport());
+        emptyImport.setBackground(glassButton(Glass.NEUTRAL, 24));
+        importBigButton = emptyImport;
+        LinearLayout.LayoutParams bigParams = new LinearLayout.LayoutParams(-2, dp(48));
+        bigParams.topMargin = dp(16);
         empty.addView(importBigButton, bigParams);
         middle.addView(empty, new FrameLayout.LayoutParams(-1, -1));
 
-        if (!isLandscape()) {
-            content.addView(actions, new LinearLayout.LayoutParams(-1, -2));
-        }
-
-        TextView version = makeText(
-            new String(nativeVersion(), StandardCharsets.UTF_8), 11, 0x80FFFFFF, false);
-        version.setGravity(Gravity.CENTER);
-        version.setPadding(0, dp(8), 0, 0);
-        content.addView(version, new LinearLayout.LayoutParams(-1, -2));
-
+        content.addView(buildLibraryToolbar(), new LinearLayout.LayoutParams(-1, -2));
         setContentView(root);
+        content.requestFocus();
         refreshLibrary();
+    }
+
+    private LinearLayout buildLibraryToolbar() {
+        LinearLayout toolbar = new LinearLayout(this);
+        toolbar.setGravity(Gravity.CENTER_VERTICAL);
+        toolbar.setPadding(dp(4), dp(4), dp(4), dp(4));
+        toolbar.setBackground(glassSurface(Glass.NEUTRAL, 28));
+
+        LinearLayout searchBox = new LinearLayout(this);
+        searchBox.setGravity(Gravity.CENTER_VERTICAL);
+        searchBox.setPadding(dp(12), 0, 0, 0);
+        ImageView magnifier = new ImageView(this);
+        magnifier.setImageDrawable(new LibraryIcon(Icon.SEARCH, TEXT));
+        searchBox.addView(magnifier, new LinearLayout.LayoutParams(dp(20), dp(20)));
+
+        EditText search = new EditText(this);
+        search.setSingleLine(true);
+        search.setInputType(android.text.InputType.TYPE_CLASS_TEXT);
+        search.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
+        search.setHint(R.string.library_search);
+        search.setTextColor(TEXT);
+        search.setHintTextColor(TEXT_DIM);
+        search.setTextSize(15);
+        search.setBackground(null);
+        search.setPadding(dp(10), 0, 0, 0);
+        search.setText(searchQuery);
+        searchBox.addView(search, new LinearLayout.LayoutParams(0, dp(48), 1));
+
+        ImageView clear = iconButton(new LibraryIcon(Icon.CLOSE, TEXT_DIM), R.string.clear,
+            Glass.CLEAR, v -> search.setText(""));
+        clear.setVisibility(searchQuery.isEmpty() ? View.GONE : View.VISIBLE);
+        searchBox.addView(clear, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        search.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                searchQuery = s.toString();
+                clear.setVisibility(s.length() == 0 ? View.GONE : View.VISIBLE);
+                refreshLibrary();
+            }
+            @Override public void afterTextChanged(Editable text) {}
+        });
+        search.setOnEditorActionListener((view, action, event) -> {
+            if (action != EditorInfo.IME_ACTION_SEARCH) {
+                return false;
+            }
+            getSystemService(InputMethodManager.class)
+                .hideSoftInputFromWindow(view.getWindowToken(), 0);
+            search.clearFocus();
+            return true;
+        });
+        toolbar.addView(searchBox, new LinearLayout.LayoutParams(0, -2, 1));
+
+        favoriteFilter = iconButton(new LibraryIcon(Icon.STAR, TEXT_DIM), R.string.filter_favorites,
+            Glass.CLEAR, v -> {
+                boolean selected = "favorites".equals(Library.filter(this));
+                Library.setFilter(this, selected ? "all" : "favorites");
+                refreshLibrary();
+            });
+        toolbar.addView(favoriteFilter, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        libraryMenu = iconButton(new LibraryIcon(Icon.FILTER, TEXT_DIM), R.string.library_filters,
+            Glass.CLEAR, this::showLibraryMenu);
+        toolbar.addView(libraryMenu, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        return toolbar;
     }
 
     private void updateStatus() {
@@ -711,7 +775,8 @@ public class LauncherActivity extends Activity {
             statusText.setText(R.string.no_games);
             importBigButton.setVisibility(View.VISIBLE);
         } else {
-            statusText.setText(R.string.filter_empty);
+            statusText.setText(searchQuery.trim().isEmpty()
+                ? R.string.filter_empty : R.string.library_no_results);
             importBigButton.setVisibility(View.GONE);
         }
     }
@@ -753,8 +818,9 @@ public class LauncherActivity extends Activity {
         String sort = Library.sortMode(this);
         final java.text.Collator collator = java.text.Collator.getInstance();
         List<App> shown = new ArrayList<>();
+        String query = searchQuery.trim().toLowerCase(Locale.ROOT);
         for (App app : allApps) {
-            if (matchesFilter(app, filter)) {
+            if (matchesFilter(app, filter) && app.name.toLowerCase(Locale.ROOT).contains(query)) {
                 shown.add(app);
             }
         }
@@ -776,7 +842,7 @@ public class LauncherActivity extends Activity {
             adapter.notifyDataSetChanged();
         }
         updateStatus();
-        showFilterBar();
+        updateLibraryToolbar(filter);
         showContinueBanner();
     }
 
@@ -791,44 +857,49 @@ public class LauncherActivity extends Activity {
             getString(R.string.sort_play_time)};
     }
 
-    private void showFilterBar() {
-        if (filterBar == null) {
+    private void updateLibraryToolbar(String filter) {
+        if (favoriteFilter == null) {
             return;
         }
-        filterBar.removeAllViews();
-        String filter = Library.filter(this);
+        int index = java.util.Arrays.asList(FILTERS).indexOf(filter);
+        libraryTitle.setText(index <= 0 ? getString(R.string.library_title) : filterTitles()[index]);
+        boolean favorites = "favorites".equals(filter);
+        favoriteFilter.setSelected(favorites);
+        favoriteFilter.setBackground(glassButton(favorites ? Glass.SELECTED : Glass.CLEAR, 24));
+        favoriteFilter.setImageDrawable(new LibraryIcon(Icon.STAR, favorites ? TEXT : TEXT_DIM));
+        boolean filtered = index > 0 && !favorites;
+        libraryMenu.setSelected(filtered);
+        libraryMenu.setImageDrawable(new LibraryIcon(Icon.FILTER, filtered ? TEXT : TEXT_DIM));
+        libraryMenu.setBackground(glassButton(filtered ? Glass.SELECTED : Glass.CLEAR, 24));
+    }
+
+    private void showLibraryMenu(View anchor) {
+        PopupMenu menu = new PopupMenu(this, anchor, Gravity.END);
         String[] titles = filterTitles();
+        String selected = Library.filter(this);
         for (int i = 0; i < FILTERS.length; i++) {
-            final String value = FILTERS[i];
-            boolean on = value.equals(filter);
-            TextView chip = makeText(titles[i], 14, TEXT, on);
-            chip.setGravity(Gravity.CENTER);
-            chip.setPadding(dp(14), 0, dp(14), 0);
-            chip.setBackground(buttonBackground(on ? ACCENT : 0x2EFFFFFF, dp(17)));
-            chip.setOnClickListener(v -> {
-                Library.setFilter(this, value);
-                refreshLibrary();
-            });
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-2, dp(34));
-            params.rightMargin = dp(8);
-            filterBar.addView(chip, params);
+            menu.getMenu().add(1, i, i, titles[i]).setChecked(FILTERS[i].equals(selected));
         }
-        int sort = java.util.Arrays.asList(SORTS).indexOf(Library.sortMode(this));
-        TextView sortChip = makeText(
-            getString(R.string.sort_label, sortTitles()[Math.max(sort, 0)]), 14, TEXT, false);
-        sortChip.setGravity(Gravity.CENTER);
-        sortChip.setPadding(dp(14), 0, dp(14), 0);
-        sortChip.setBackground(buttonBackground(0x2EFFFFFF, dp(17)));
-        sortChip.setOnClickListener(v -> new AlertDialog.Builder(
-                this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle(R.string.sort_title)
-            .setSingleChoiceItems(sortTitles(), Math.max(sort, 0), (dialog, which) -> {
-                Library.setSortMode(this, SORTS[which]);
-                dialog.dismiss();
+        menu.getMenu().setGroupCheckable(1, true, true);
+        menu.getMenu().add(2, FILTERS.length, FILTERS.length, R.string.sort_title);
+        menu.setOnMenuItemClickListener(item -> {
+            if (item.getGroupId() == 1) {
+                Library.setFilter(this, FILTERS[item.getItemId()]);
                 refreshLibrary();
-            })
-            .show());
-        filterBar.addView(sortChip, new LinearLayout.LayoutParams(-2, dp(34)));
+            } else {
+                int sort = java.util.Arrays.asList(SORTS).indexOf(Library.sortMode(this));
+                new AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+                    .setTitle(R.string.sort_title)
+                    .setSingleChoiceItems(sortTitles(), Math.max(sort, 0), (dialog, which) -> {
+                        Library.setSortMode(this, SORTS[which]);
+                        dialog.dismiss();
+                        refreshLibrary();
+                    })
+                    .show();
+            }
+            return true;
+        });
+        menu.show();
     }
 
     /// "3 days ago · 12 h", or empty for a game not played yet.
@@ -848,7 +919,7 @@ public class LauncherActivity extends Activity {
         }
         continueSlot.removeAllViews();
         boolean phone = getResources().getConfiguration().smallestScreenWidthDp < 600;
-        if (phone && isLandscape()) {
+        if ((phone && isLandscape()) || !searchQuery.trim().isEmpty()) {
             return;
         }
         App last = null;
@@ -865,16 +936,15 @@ public class LauncherActivity extends Activity {
         banner.setOrientation(LinearLayout.HORIZONTAL);
         banner.setGravity(Gravity.CENTER_VERTICAL);
         banner.setPadding(dp(10), dp(10), dp(14), dp(10));
-        banner.setBackground(buttonBackground(0x26FFFFFF, dp(14)));
+        banner.setBackground(glassButton(Glass.NEUTRAL, 19));
         banner.setOnClickListener(v -> launch(app));
         ImageView poster = new ImageView(this);
-        poster.setImageBitmap(app.poster);
-        poster.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        bindGameArtwork(poster, app);
         GradientDrawable shape = new GradientDrawable();
         shape.setCornerRadius(dp(8));
         poster.setBackground(shape);
         poster.setClipToOutline(true);
-        banner.addView(poster, new LinearLayout.LayoutParams(dp(54), dp(72)));
+        banner.addView(poster, new LinearLayout.LayoutParams(dp(42), dp(42)));
         LinearLayout texts = new LinearLayout(this);
         texts.setOrientation(LinearLayout.VERTICAL);
         texts.setPadding(dp(14), 0, dp(10), 0);
@@ -885,9 +955,9 @@ public class LauncherActivity extends Activity {
         texts.addView(name);
         texts.addView(makeText(playedText(app), 13, TEXT_DIM, false));
         banner.addView(texts, new LinearLayout.LayoutParams(0, -2, 1));
-        TextView play = makeText("▶", 20, TEXT, true);
+        TextView play = makeText("▶", 17, TEXT, true);
         play.setGravity(Gravity.CENTER);
-        play.setBackground(buttonBackground(ACCENT, dp(22)));
+        play.setBackground(glassSurface(Glass.NEUTRAL, 22));
         banner.addView(play, new LinearLayout.LayoutParams(dp(44), dp(44)));
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, -2);
         params.topMargin = dp(14);
@@ -907,106 +977,95 @@ public class LauncherActivity extends Activity {
         }
     }
 
-    /**
-     * A game's page: its poster, play time, progress and favourite, and
-     * everything that can be done with it.
-     */
-    private void showDetails(final App app) {
-        final Dialog dialog = new Dialog(this, android.R.style.Theme_Material_NoActionBar_Fullscreen);
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        int pad = dp(20);
-        layout.setPadding(pad, pad, pad, pad);
+    private void showDetails(App app) {
+        showSettingsSheet(app.name, (dialog, layout) -> populateGameDetails(app, dialog, layout),
+            null);
+    }
 
-        LinearLayout bar = new LinearLayout(this);
-        bar.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = makeText(app.name, 22, TEXT, true);
-        title.setSingleLine(true);
-        title.setEllipsize(TextUtils.TruncateAt.END);
-        bar.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
-        bar.addView(makeButton(getString(R.string.close), false, v -> dialog.dismiss()),
-            new LinearLayout.LayoutParams(-2, dp(40)));
-        layout.addView(bar);
+    private void populateGameDetails(App app, Dialog dialog, LinearLayout layout) {
+        LinearLayout game = settingsCard(layout);
+        LinearLayout summary = new LinearLayout(this);
+        summary.setGravity(Gravity.CENTER_VERTICAL);
+        summary.setPadding(dp(16), dp(12), dp(16), dp(12));
 
-        LinearLayout top = new LinearLayout(this);
-        top.setOrientation(LinearLayout.HORIZONTAL);
-        top.setPadding(0, dp(16), 0, 0);
         ImageView poster = new ImageView(this);
-        poster.setImageBitmap(app.poster);
-        poster.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        GradientDrawable shape = new GradientDrawable();
-        shape.setCornerRadius(dp(10));
-        poster.setBackground(shape);
+        bindGameArtwork(poster, app);
+        poster.setBackground(roundedBackground(SETTINGS_BG, 8));
         poster.setClipToOutline(true);
-        top.addView(poster, new LinearLayout.LayoutParams(dp(138),
-            dp(138) * Posters.HEIGHT / Posters.WIDTH));
+        summary.addView(poster, new LinearLayout.LayoutParams(dp(60), dp(60)));
+
         LinearLayout info = new LinearLayout(this);
         info.setOrientation(LinearLayout.VERTICAL);
-        info.setPadding(dp(18), 0, 0, 0);
-        TextView lastPlayed = makeText(app.lastPlayed > 0
+        info.setPaddingRelative(dp(14), 0, 0, 0);
+        info.addView(makeText(app.lastPlayed > 0
             ? getString(R.string.last_played, Library.ago(this, app.lastPlayed))
-            : getString(R.string.never_played), 15, TEXT, false);
-        info.addView(lastPlayed);
+            : getString(R.string.never_played), 15, INK, true));
         if (app.playTime > 0) {
-            TextView playTime = makeText(
+            TextView time = makeText(
                 getString(R.string.play_time, Library.duration(this, app.playTime)),
-                15, TEXT, false);
-            playTime.setPadding(0, dp(6), 0, 0);
-            info.addView(playTime);
+                14, INK_DIM, false);
+            time.setPadding(0, dp(4), 0, 0);
+            info.addView(time);
         }
-        final TextView favorite = makeButton("", false, null);
-        Runnable showFavorite = () -> favorite.setText(app.favorite
-            ? R.string.favorite_remove : R.string.favorite_add);
-        showFavorite.run();
-        favorite.setOnClickListener(v -> {
-            app.favorite = !app.favorite;
-            Library.setFavorite(this, app.key, app.favorite);
-            showFavorite.run();
+        summary.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
+        game.addView(summary, new LinearLayout.LayoutParams(-1, -2));
+
+        addGameAction(game, dialog, R.string.play, () -> launch(app));
+        addSwitch(game, getString(R.string.game_settings_favorite), app.favorite, favorite -> {
+            app.favorite = favorite;
+            Library.setFavorite(this, app.key, favorite);
             refreshLibrary();
         });
-        LinearLayout.LayoutParams favoriteParams = new LinearLayout.LayoutParams(-2, dp(40));
-        favoriteParams.topMargin = dp(14);
-        info.addView(favorite, favoriteParams);
-        top.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
-        layout.addView(top);
+        addSettingChoice(game, R.string.library_status_label, R.array.library_status, app.status, status -> {
+            app.status = status;
+            Library.setStatus(this, app.key, status);
+            refreshLibrary();
+        });
 
-        LinearLayout.LayoutParams playParams = new LinearLayout.LayoutParams(-1, dp(50));
-        playParams.topMargin = dp(18);
-        layout.addView(makeButton(getString(R.string.play), true, v -> {
-            dialog.dismiss();
-            launch(app);
-        }), playParams);
-
-        addSegments(layout, getString(R.string.library_status_label),
-            getResources().getStringArray(R.array.library_status), app.status, i -> {
-                app.status = i;
-                Library.setStatus(this, app.key, i);
-                refreshLibrary();
-            });
-
-        List<String> items = new ArrayList<>();
-        List<Runnable> actions = new ArrayList<>();
-        appActions(app, items, actions);
-        for (int i = 0; i < items.size(); i++) {
-            final Runnable action = actions.get(i);
-            TextView button = makeButton(items.get(i), false, v -> {
-                dialog.dismiss();
-                action.run();
-            });
-            button.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(46));
-            params.topMargin = dp(i == 0 ? 18 : 8);
-            layout.addView(button, params);
+        boolean identified = app.bundleId != null && !app.bundleId.isEmpty();
+        boolean hasPspSaves = MHP2G_BUNDLE_ID.equals(app.bundleId) || MHFU_BUNDLE_ID.equals(app.bundleId);
+        Runnable unidentified = () ->
+            Toast.makeText(this, R.string.unknown_game_saves, Toast.LENGTH_LONG).show();
+        LinearLayout saves = settingsSection(layout, R.string.game_settings_saves);
+        addGameAction(saves, dialog, R.string.menu_import_save,
+            identified ? () -> confirmImportSave(app) : unidentified);
+        addGameAction(saves, dialog, R.string.menu_export_save,
+            identified ? () -> startExportSave(app) : unidentified);
+        if (hasPspSaves) {
+            addGameAction(saves, dialog, R.string.menu_import_psp_save, () -> confirmImportPspSave(app));
         }
 
-        ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(0xFF15192E);
-        scroll.addView(layout);
-        dialog.setContentView(scroll);
-        dialog.show();
+        LinearLayout emulation = settingsSection(layout, R.string.settings_emulation);
+        addSettingsRow(emulation, getString(R.string.device_profile_title), appDeviceProfileLabel(app),
+            v -> showDeviceProfiles(app, () -> settingsRowValue(v).setText(appDeviceProfileLabel(app))));
+        if (hasPspSaves) {
+            addGameAction(emulation, dialog, R.string.menu_p2g_layout, () -> showP2GViewOptions(app));
+        }
+        if ("com.rockstargames.gta3vc".equals(app.bundleId)) {
+            addGameAction(emulation, dialog, R.string.menu_performance_tests,
+                () -> showPerformanceTests(app));
+            addGameAction(emulation, dialog, R.string.menu_audio_tests, () -> showAudioTests(app));
+        }
+
+        LinearLayout manage = settingsSection(layout, R.string.game_settings_manage);
+        addGameAction(manage, dialog, R.string.menu_add_to_home, () -> addShortcut(app));
+        addGameAction(manage, dialog, R.string.menu_delete_game, () -> confirmDelete(app));
+    }
+
+    private void addGameAction(LinearLayout card, Dialog dialog, int label, Runnable action) {
+        addSettingsRow(card, getString(label), null, v -> {
+            dialog.dismiss();
+            action.run();
+        });
     }
 
     private class AppAdapter extends BaseAdapter {
+        private final int coverInset;
+
+        AppAdapter(int coverInset) {
+            this.coverInset = coverInset;
+        }
+
         @Override
         public int getCount() {
             return apps.size();
@@ -1032,8 +1091,7 @@ public class LauncherActivity extends Activity {
                 item.setOrientation(LinearLayout.VERTICAL);
                 FrameLayout frame = new FrameLayout(LauncherActivity.this);
                 frame.setClipChildren(false);
-                ImageView poster = new PosterView(LauncherActivity.this);
-                poster.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                ImageView poster = new SquareCoverView(LauncherActivity.this);
                 GradientDrawable shape = new GradientDrawable();
                 shape.setColor(0x40FFFFFF);
                 shape.setCornerRadius(dp(10));
@@ -1044,24 +1102,29 @@ public class LauncherActivity extends Activity {
                 poster.setForeground(new RippleDrawable(
                     ColorStateList.valueOf(0x40FFFFFF), null, shape));
                 frame.addView(poster, new FrameLayout.LayoutParams(-1, -2));
-                // Progress, top left, and favourite, top right.
+                // Keep the progress badge and favouriting mark on separate edges.
                 TextView status = makeText("", 11, TEXT, true);
+                status.setSingleLine(true);
+                status.setEllipsize(TextUtils.TruncateAt.END);
                 status.setPadding(dp(7), dp(2), dp(7), dp(2));
                 status.setElevation(dp(5));
                 FrameLayout.LayoutParams statusParams = new FrameLayout.LayoutParams(-2, -2,
                     Gravity.TOP | Gravity.START);
-                statusParams.setMargins(dp(6), dp(6), 0, 0);
+                statusParams.setMargins(dp(6), dp(6), dp(6), 0);
                 frame.addView(status, statusParams);
                 TextView star = makeText("★", 18, 0xFFFFD34D, true);
                 star.setShadowLayer(dp(3), 0, dp(1), 0xCC000000);
                 star.setElevation(dp(5));
                 FrameLayout.LayoutParams starParams = new FrameLayout.LayoutParams(-2, -2,
-                    Gravity.TOP | Gravity.END);
-                starParams.setMargins(0, dp(2), dp(7), 0);
+                    Gravity.BOTTOM | Gravity.END);
+                starParams.setMarginEnd(dp(6));
+                starParams.bottomMargin = dp(4);
                 frame.addView(star, starParams);
-                item.addView(frame, new LinearLayout.LayoutParams(-1, -2));
+                LinearLayout.LayoutParams coverParams = new LinearLayout.LayoutParams(-1, -2);
+                coverParams.setMargins(coverInset, 0, coverInset, 0);
+                item.addView(frame, coverParams);
 
-                TextView name = makeText("", 13, TEXT, false);
+                TextView name = makeText("", 14, TEXT, true);
                 name.setGravity(Gravity.CENTER);
                 name.setSingleLine(true);
                 name.setEllipsize(TextUtils.TruncateAt.END);
@@ -1083,7 +1146,7 @@ public class LauncherActivity extends Activity {
             TextView name = (TextView) item.getChildAt(1);
             TextView played = (TextView) item.getChildAt(2);
             App app = apps.get(position);
-            poster.setImageBitmap(app.poster);
+            bindGameArtwork(poster, app);
             int color = statusColor(app.status);
             status.setVisibility(color != 0 ? View.VISIBLE : View.GONE);
             if (color != 0) {
@@ -1098,16 +1161,28 @@ public class LauncherActivity extends Activity {
         }
     }
 
-    /// An image view as tall as a poster (3:4) for its width.
-    private static class PosterView extends ImageView {
-        PosterView(android.content.Context context) {
+    private void bindGameArtwork(ImageView image, App app) {
+        Bitmap artwork = app.poster != null ? app.poster : app.icon;
+        image.setScaleType(app.poster != null
+            ? ImageView.ScaleType.CENTER_CROP : ImageView.ScaleType.FIT_CENTER);
+        int padding = artwork == null ? dp(8) : 0;
+        image.setPadding(padding, padding, padding, padding);
+        if (artwork == null) {
+            image.setImageDrawable(new LibraryIcon(Icon.GAME, 0xFF919198));
+        } else {
+            image.setImageBitmap(artwork);
+        }
+    }
+
+    private static class SquareCoverView extends ImageView {
+        SquareCoverView(android.content.Context context) {
             super(context);
         }
 
         @Override
         protected void onMeasure(int widthSpec, int heightSpec) {
-            int width = View.MeasureSpec.getSize(widthSpec);
-            setMeasuredDimension(width, width * Posters.HEIGHT / Posters.WIDTH);
+            int size = View.MeasureSpec.getSize(widthSpec);
+            setMeasuredDimension(size, size);
         }
     }
 
@@ -1149,40 +1224,6 @@ public class LauncherActivity extends Activity {
         startActivity(intent);
     }
 
-    /// What can be done with a game, as titles and actions.
-    private void appActions(final App app, List<String> items, List<Runnable> actions) {
-        // Saves need to know which game they belong to.
-        final boolean identified = app.bundleId != null && !app.bundleId.isEmpty();
-        final Runnable unidentified = () ->
-            Toast.makeText(this, R.string.unknown_game_saves, Toast.LENGTH_LONG).show();
-        items.add(getString(R.string.menu_add_to_home));
-        actions.add(() -> addShortcut(app));
-        items.add(getString(R.string.menu_import_save));
-        actions.add(identified ? () -> confirmImportSave(app) : unidentified);
-        items.add(getString(R.string.menu_export_save));
-        actions.add(identified ? () -> startExportSave(app) : unidentified);
-        items.add(getString(R.string.menu_delete_game));
-        actions.add(() -> confirmDelete(app));
-        items.add(getString(R.string.menu_device_profile, appDeviceProfileLabel(app)));
-        actions.add(() -> showDeviceProfiles(app, null));
-        if ("com.rockstargames.gta3vc".equals(app.bundleId)) {
-            items.add(getString(R.string.menu_performance_tests));
-            actions.add(() -> showPerformanceTests(app));
-            items.add(getString(R.string.menu_audio_tests));
-            actions.add(() -> showAudioTests(app));
-        } else if (MHP2G_BUNDLE_ID.equals(app.bundleId)) {
-            items.add(getString(R.string.menu_p2g_layout));
-            actions.add(() -> showP2GViewOptions(app));
-            items.add(getString(R.string.menu_import_psp_save));
-            actions.add(() -> confirmImportPspSave(app));
-        } else if (MHFU_BUNDLE_ID.equals(app.bundleId)) {
-            items.add(getString(R.string.menu_p2g_layout));
-            actions.add(() -> showP2GViewOptions(app));
-            items.add(getString(R.string.menu_import_psp_save));
-            actions.add(() -> confirmImportPspSave(app));
-        }
-    }
-
     // ---- Home screen shortcuts ----
 
     /// Shortcuts open the launcher with this action, which starts the game
@@ -1199,6 +1240,9 @@ public class LauncherActivity extends Activity {
             .putExtra(EXTRA_BUNDLE_ID, app.bundleId)
             .putExtra(EXTRA_APP_NAME, app.name);
         Bitmap icon = app.icon != null ? app.icon : app.poster;
+        android.graphics.drawable.Icon shortcutIcon = icon != null
+            ? android.graphics.drawable.Icon.createWithBitmap(icon)
+            : android.graphics.drawable.Icon.createWithResource(this, BuildConfig.APP_ICON);
         android.content.pm.ShortcutManager manager =
             getSystemService(android.content.pm.ShortcutManager.class);
         if (manager == null || !manager.isRequestPinShortcutSupported()) {
@@ -1209,7 +1253,7 @@ public class LauncherActivity extends Activity {
         android.content.pm.ShortcutInfo info =
             new android.content.pm.ShortcutInfo.Builder(this, id)
                 .setShortLabel(app.name)
-                .setIcon(android.graphics.drawable.Icon.createWithBitmap(icon))
+                .setIcon(shortcutIcon)
                 .setIntent(play)
                 .build();
         // The home screen asks for confirmation and says when it's added.
@@ -1524,75 +1568,220 @@ public class LauncherActivity extends Activity {
     }
 
     private void showQuickOptions() {
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        int pad = dp(20);
-        layout.setPadding(pad, dp(8), pad, dp(8));
+        showSettingsSheet(getString(R.string.settings), this::populateQuickOptions,
+            () -> quickOptions.save(getBaseDir()));
+    }
 
-        final TextView deviceProfile = makeText(
-            getString(R.string.menu_device_profile, deviceProfileLabel(globalDeviceProfile())),
-            15, TEXT, true);
-        deviceProfile.setPadding(dp(14), dp(12), dp(14), dp(12));
-        deviceProfile.setMinHeight(dp(48));
-        deviceProfile.setBackground(buttonBackground(0x2EFFFFFF, dp(12)));
-        deviceProfile.setOnClickListener(v -> showDeviceProfiles(null,
-            () -> deviceProfile.setText(getString(R.string.menu_device_profile,
-                deviceProfileLabel(globalDeviceProfile())))));
-        layout.addView(deviceProfile, new LinearLayout.LayoutParams(-1, -2));
-        TextView deviceHint = makeText(getString(R.string.device_profile_hint), 13, TEXT_DIM, false);
-        deviceHint.setPadding(0, dp(6), 0, 0);
-        layout.addView(deviceHint);
+    @SuppressWarnings("deprecation")
+    private void showSettingsSheet(String heading, BiConsumer<Dialog, LinearLayout> populate,
+                                   Runnable onDismiss) {
+        Dialog dialog = new Dialog(this, android.R.style.Theme_Material_Light_NoActionBar);
+        FrameLayout root = new FrameLayout(this);
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        GradientDrawable panelBackground = roundedBackground(SETTINGS_BG, 28);
+        float radius = dp(28);
+        panelBackground.setCornerRadii(new float[]{radius, radius, radius, radius, 0, 0, 0, 0});
+        root.setBackground(panelBackground);
+        root.setClipToOutline(true);
+        root.addView(panel, new FrameLayout.LayoutParams(-1, -1));
 
-        addSegments(layout, getString(R.string.option_filter),
-            getResources().getStringArray(R.array.option_filter_choices),
-            quickOptions.filter, i -> quickOptions.filter = i);
-        addSegments(layout, getString(R.string.option_aspect),
-            getResources().getStringArray(R.array.option_aspect_choices),
-            quickOptions.aspect, i -> quickOptions.aspect = i);
-        addSegments(layout, getString(R.string.option_orientation),
-            getResources().getStringArray(R.array.option_orientation_choices),
-            quickOptions.orientation, i -> quickOptions.orientation = i);
-        addSegments(layout, getString(R.string.option_scale),
-            getResources().getStringArray(R.array.option_scale_choices),
-            quickOptions.scaleHack, i -> quickOptions.scaleHack = i);
-        addSwitch(layout, getString(R.string.option_keep_screen_on), quickOptions.keepScreenOn,
-            b -> quickOptions.keepScreenOn = b);
-        addSwitch(layout, getString(R.string.option_tilt_controls), quickOptions.tiltControls,
-            b -> quickOptions.tiltControls = b);
-        addSwitch(layout, getString(R.string.option_network), quickOptions.network,
-            b -> quickOptions.network = b);
-        // A launcher setting, not a touchHLE option, so it's not in the file.
-        final SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        addSwitch(layout, getString(R.string.option_check_updates),
-            prefs.getBoolean(PREF_CHECK_UPDATES, true),
-            b -> prefs.edit().putBoolean(PREF_CHECK_UPDATES, b).apply());
-        addSwitch(layout, getString(R.string.option_online_posters),
-            prefs.getBoolean(PREF_ONLINE_POSTERS, true),
-            b -> prefs.edit().putBoolean(PREF_ONLINE_POSTERS, b).apply());
-
-        TextView language = makeButton(
-            getString(R.string.language, Languages.name(this, Languages.chosenTag(this))), false, null);
-        LinearLayout.LayoutParams languageParams = new LinearLayout.LayoutParams(-1, dp(44));
-        languageParams.topMargin = dp(16);
-        layout.addView(language, languageParams);
-
-        TextView copyright = makeButton(getString(R.string.copyright), false, null);
-        LinearLayout.LayoutParams copyrightParams = new LinearLayout.LayoutParams(-1, dp(44));
-        copyrightParams.topMargin = dp(16);
-        layout.addView(copyright, copyrightParams);
+        LinearLayout header = new LinearLayout(this);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(22), dp(12), dp(16), dp(12));
+        TextView title = makeText(heading, 28, INK, true);
+        title.setMaxLines(2);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        title.setAccessibilityHeading(true);
+        header.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+        ImageView close = iconButton(new LibraryIcon(Icon.CLOSE, INK), R.string.close,
+            Glass.LIGHT, v -> dialog.dismiss());
+        header.addView(close, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        panel.addView(header);
 
         ScrollView scroll = new ScrollView(this);
+        scroll.setClipToPadding(false);
+        scroll.setFillViewport(true);
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(18), 0, dp(18), dp(20));
         scroll.addView(layout);
-        final AlertDialog dialog = new AlertDialog.Builder(
-                this, android.R.style.Theme_Material_Dialog_Alert)
-            .setTitle(R.string.settings)
-            .setView(scroll)
-            .setPositiveButton(R.string.done, null)
-            .setOnDismissListener(d -> quickOptions.save(getBaseDir()))
-            .create();
-        language.setOnClickListener(v -> showLanguages(dialog));
-        copyright.setOnClickListener(v -> showCopyright());
+        panel.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        populate.accept(dialog, layout);
+
+        dialog.setContentView(root);
+        dialog.setOnDismissListener(d -> {
+            settingsDialog = null;
+            if (onDismiss != null) {
+                onDismiss.run();
+            }
+        });
+        Window window = dialog.getWindow();
+        window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        window.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+        window.setDimAmount(0.55f);
+        window.setGravity(Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        window.setNavigationBarContrastEnforced(false);
+        window.setNavigationBarColor(Color.TRANSPARENT);
+        window.setNavigationBarDividerColor(Color.TRANSPARENT);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false);
+            WindowManager.LayoutParams attrs = window.getAttributes();
+            attrs.setFitInsetsTypes(WindowInsets.Type.statusBars() | WindowInsets.Type.captionBar());
+            window.setAttributes(attrs);
+            root.setOnApplyWindowInsetsListener((view, insets) -> {
+                Insets safe = insets.getInsets(
+                    WindowInsets.Type.navigationBars() | WindowInsets.Type.displayCutout());
+                view.setPadding(safe.left, 0, safe.right, 0);
+                scroll.setPadding(0, 0, 0, safe.bottom);
+                return insets;
+            });
+        } else {
+            window.getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                    | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+            root.setOnApplyWindowInsetsListener((view, insets) -> {
+                view.setPadding(insets.getSystemWindowInsetLeft(), 0, insets.getSystemWindowInsetRight(), 0);
+                scroll.setPadding(0, 0, 0, insets.getSystemWindowInsetBottom());
+                return insets;
+            });
+        }
         dialog.show();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            WindowInsetsController controller = window.getInsetsController();
+            if (controller != null) {
+                controller.setSystemBarsAppearance(
+                    WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS,
+                    WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
+            }
+        }
+        settingsDialog = dialog;
+        sizeSettingsDialog(window);
+    }
+
+    private void populateQuickOptions(Dialog dialog, LinearLayout layout) {
+        LinearLayout display = settingsSection(layout, R.string.settings_display);
+        addSettingChoice(display, R.string.option_filter, R.array.option_filter_choices,
+            quickOptions.filter, i -> quickOptions.filter = i);
+        addSettingChoice(display, R.string.option_aspect, R.array.option_aspect_choices,
+            quickOptions.aspect, i -> quickOptions.aspect = i);
+        addSettingChoice(display, R.string.option_orientation, R.array.option_orientation_choices,
+            quickOptions.orientation, i -> quickOptions.orientation = i);
+        addSettingChoice(display, R.string.option_scale, R.array.option_scale_choices,
+            quickOptions.scaleHack, i -> quickOptions.scaleHack = i);
+        addSwitch(display, getString(R.string.option_keep_screen_on), quickOptions.keepScreenOn,
+            b -> quickOptions.keepScreenOn = b);
+
+        LinearLayout emulation = settingsSection(layout, R.string.settings_emulation);
+        addSettingsRow(emulation, getString(R.string.device_profile_title),
+            deviceProfileLabel(globalDeviceProfile()), v -> showDeviceProfiles(null,
+                () -> settingsRowValue(v).setText(deviceProfileLabel(globalDeviceProfile()))));
+        addSwitch(emulation, getString(R.string.option_tilt_controls), quickOptions.tiltControls,
+            b -> quickOptions.tiltControls = b);
+        addSwitch(emulation, getString(R.string.option_network), quickOptions.network,
+            b -> quickOptions.network = b);
+
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        LinearLayout app = settingsSection(layout, R.string.settings_app);
+        addSettingsRow(app, getString(R.string.language_title),
+            Languages.name(this, Languages.chosenTag(this)), v -> showLanguages(dialog));
+        addSwitch(app, getString(R.string.option_online_posters),
+            prefs.getBoolean(PREF_ONLINE_POSTERS, true),
+            b -> prefs.edit().putBoolean(PREF_ONLINE_POSTERS, b).apply());
+        addSwitch(app, getString(R.string.option_check_updates),
+            prefs.getBoolean(PREF_CHECK_UPDATES, true),
+            b -> prefs.edit().putBoolean(PREF_CHECK_UPDATES, b).apply());
+        addSettingsRow(app, getString(R.string.copyright), null, v -> showCopyright());
+        TextView version = makeText(
+            new String(nativeVersion(), StandardCharsets.UTF_8), 12, INK_DIM, false);
+        version.setPadding(dp(16), dp(12), dp(16), 0);
+        layout.addView(version);
+    }
+
+    private void sizeSettingsDialog(Window window) {
+        Configuration config = getResources().getConfiguration();
+        window.setLayout(dp(Math.min(config.screenWidthDp, 560)),
+            dp(config.screenHeightDp - (isLandscape() ? 8 : 46)));
+    }
+
+    private LinearLayout settingsSection(LinearLayout parent, int title) {
+        TextView heading = makeText(getString(title), 14, INK_DIM, true);
+        heading.setAccessibilityHeading(true);
+        heading.setPadding(dp(12), dp(10), dp(12), dp(8));
+        parent.addView(heading);
+
+        return settingsCard(parent);
+    }
+
+    private LinearLayout settingsCard(LinearLayout parent) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setBackground(roundedBackground(Color.WHITE, 20));
+        card.setClipToOutline(true);
+        parent.addView(card, new LinearLayout.LayoutParams(-1, -2));
+        return card;
+    }
+
+    private void addSettingsDivider(LinearLayout card) {
+        if (card.getChildCount() == 0) {
+            return;
+        }
+        View divider = new View(this);
+        divider.setBackgroundColor(SETTINGS_BG);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(1));
+        params.setMarginStart(dp(16));
+        params.setMarginEnd(dp(16));
+        card.addView(divider, params);
+    }
+
+    private void addSettingsRow(LinearLayout card, String label, String value,
+                                    View.OnClickListener action) {
+        addSettingsDivider(card);
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setMinimumHeight(dp(54));
+        row.setPadding(dp(16), dp(8), dp(16), dp(8));
+        row.setBackground(new RippleDrawable(ColorStateList.valueOf(0x181C1C1E),
+            null, new ColorDrawable(Color.WHITE)));
+        row.setOnClickListener(action);
+        row.setFocusable(true);
+        row.addView(makeText(label, 15, INK, true), new LinearLayout.LayoutParams(0, -2, 1));
+        TextView detail = makeText(value, 14, INK_DIM, false);
+        if (value != null) {
+            detail.setMaxWidth(dp(144));
+            detail.setGravity(Gravity.END);
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-2, -2);
+            params.setMarginStart(dp(10));
+            row.addView(detail, params);
+        }
+        ImageView arrow = new ImageView(this);
+        arrow.setImageDrawable(new LibraryIcon(Icon.NEXT, INK_DIM));
+        LinearLayout.LayoutParams arrowParams = new LinearLayout.LayoutParams(dp(16), dp(16));
+        arrowParams.setMarginStart(dp(8));
+        row.addView(arrow, arrowParams);
+        card.addView(row, new LinearLayout.LayoutParams(-1, -2));
+    }
+
+    private TextView settingsRowValue(View row) {
+        return (TextView) ((LinearLayout) row).getChildAt(1);
+    }
+
+    private void addSettingChoice(LinearLayout parent, int label, int choices, int selected,
+                                  IntSetter setter) {
+        String[] titles = getResources().getStringArray(choices);
+        int[] current = {selected};
+        addSettingsRow(parent, getString(label), titles[selected],
+            v -> new AlertDialog.Builder(this, android.R.style.Theme_Material_Light_Dialog_Alert)
+                .setTitle(label)
+                .setSingleChoiceItems(titles, current[0], (dialog, which) -> {
+                    current[0] = which;
+                    setter.set(which);
+                    settingsRowValue(v).setText(titles[which]);
+                    dialog.dismiss();
+                })
+                .setNegativeButton(R.string.cancel, null)
+                .show());
     }
 
     /// Changing the language closes the settings and rebuilds the launcher in
@@ -1628,53 +1817,22 @@ public class LauncherActivity extends Activity {
         void set(boolean value);
     }
 
-    private void addSegments(LinearLayout parent, String label, String[] titles, int selected,
-                             final IntSetter setter) {
-        TextView labelView = makeText(label, 14, TEXT_DIM, false);
-        labelView.setPadding(0, dp(14), 0, dp(6));
-        parent.addView(labelView);
-
-        final LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        for (int i = 0; i < titles.length; i++) {
-            final int index = i;
-            TextView segment = makeText(titles[i], 14, TEXT, false);
-            segment.setGravity(Gravity.CENTER);
-            segment.setSingleLine(true);
-            segment.setOnClickListener(v -> {
-                setter.set(index);
-                styleSegments(row, index);
-            });
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(38), 1);
-            if (i > 0) {
-                params.leftMargin = dp(6);
-            }
-            row.addView(segment, params);
-        }
-        styleSegments(row, selected);
-        parent.addView(row);
-    }
-
-    private void styleSegments(LinearLayout row, int selected) {
-        for (int i = 0; i < row.getChildCount(); i++) {
-            TextView segment = (TextView) row.getChildAt(i);
-            boolean on = i == selected;
-            segment.setBackground(buttonBackground(on ? ACCENT : 0x26FFFFFF, dp(10)));
-            segment.setTypeface(on ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
-        }
-    }
-
     private void addSwitch(LinearLayout parent, String label, boolean checked,
                            final BoolSetter setter) {
+        addSettingsDivider(parent);
         Switch view = new Switch(this);
         view.setText(label);
+        view.setTextColor(INK);
         view.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         view.setChecked(checked);
-        view.setMinHeight(dp(48));
+        view.setPadding(dp(16), dp(6), dp(16), dp(6));
+        view.setMinHeight(dp(54));
+        view.setSwitchPadding(dp(12));
+        int[][] states = {{android.R.attr.state_checked}, {}};
+        view.setThumbTintList(new ColorStateList(states, new int[]{0xFF424246, 0xFF6F6F76}));
+        view.setTrackTintList(new ColorStateList(states, new int[]{0xFFA9A9AE, 0xFFD0D0D5}));
         view.setOnCheckedChangeListener((button, isChecked) -> setter.set(isChecked));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
-        params.topMargin = dp(8);
-        parent.addView(view, params);
+        parent.addView(view, new LinearLayout.LayoutParams(-1, -2));
     }
 
     /**
@@ -2807,6 +2965,82 @@ public class LauncherActivity extends Activity {
                 showUpdateBanner();
             })
             .show();
+    }
+
+    private enum Icon { ADD, CLOSE, SEARCH, FILTER, STAR, NEXT, GAME }
+
+    private static class LibraryIcon extends Drawable {
+        private final Icon icon;
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        LibraryIcon(Icon icon, int color) {
+            this.icon = icon;
+            paint.setColor(color);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(1.8f);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
+        }
+
+        @Override
+        public void draw(Canvas canvas) {
+            Rect bounds = getBounds();
+            canvas.save();
+            canvas.translate(bounds.left, bounds.top);
+            canvas.scale(bounds.width() / 24f, bounds.height() / 24f);
+            switch (icon) {
+                case ADD:
+                    canvas.drawLine(12, 5, 12, 19, paint);
+                    canvas.drawLine(5, 12, 19, 12, paint);
+                    break;
+                case CLOSE:
+                    canvas.drawLine(7, 7, 17, 17, paint);
+                    canvas.drawLine(17, 7, 7, 17, paint);
+                    break;
+                case SEARCH:
+                    canvas.drawCircle(10, 10, 5.5f, paint);
+                    canvas.drawLine(14, 14, 20, 20, paint);
+                    break;
+                case FILTER:
+                    canvas.drawLine(4, 6, 20, 6, paint);
+                    canvas.drawLine(7, 12, 17, 12, paint);
+                    canvas.drawLine(10, 18, 14, 18, paint);
+                    break;
+                case STAR:
+                    Path star = new Path();
+                    star.moveTo(12, 3);
+                    star.lineTo(15, 9);
+                    star.lineTo(21.5f, 10);
+                    star.lineTo(17, 14.5f);
+                    star.lineTo(18, 21);
+                    star.lineTo(12, 18);
+                    star.lineTo(6, 21);
+                    star.lineTo(7, 14.5f);
+                    star.lineTo(2.5f, 10);
+                    star.lineTo(9, 9);
+                    star.close();
+                    canvas.drawPath(star, paint);
+                    break;
+                case GAME:
+                    canvas.drawRoundRect(3, 6, 21, 18, 5, 5, paint);
+                    canvas.drawLine(6, 12, 12, 12, paint);
+                    canvas.drawLine(9, 9, 9, 15, paint);
+                    canvas.drawPoint(16, 10.5f, paint);
+                    canvas.drawPoint(18, 13.5f, paint);
+                    break;
+                case NEXT:
+                    canvas.drawLine(9, 5, 16, 12, paint);
+                    canvas.drawLine(16, 12, 9, 19, paint);
+                    break;
+            }
+            canvas.restore();
+        }
+
+        @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); }
+        @Override public void setColorFilter(ColorFilter filter) { paint.setColorFilter(filter); }
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+        @Override public int getIntrinsicWidth() { return 24; }
+        @Override public int getIntrinsicHeight() { return 24; }
     }
 
     /// A gear icon for the settings button, drawn here rather than taken from

@@ -223,4 +223,14 @@
         <item quantity="one">ゲームは IPA ではなく、展開したファイルから実行するようになりました。%1$d 個のゲームを展開すると、このアプリのフォルダ内の IPA は削除されます。展開するまで一覧には表示されません。</item>
         <item quantity="other">ゲームは IPA ではなく、展開したファイルから実行するようになりました。%1$d 個のゲームを展開すると、このアプリのフォルダ内の IPA は削除されます。展開するまで一覧には表示されません。</item>
     </plurals>
+    <string name="library_title">ライブラリ</string>
+    <string name="library_search">ゲームを検索</string>
+    <string name="library_filters">絞り込みと並べ替え</string>
+    <string name="library_no_results">一致するゲームがありません。</string>
+    <string name="settings_display">表示</string>
+    <string name="settings_emulation">エミュレーション</string>
+    <string name="settings_app">Podroid</string>
+    <string name="game_settings_favorite">お気に入り</string>
+    <string name="game_settings_saves">セーブデータ</string>
+    <string name="game_settings_manage">ゲームの管理</string>
 </resources>
