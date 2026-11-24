@@ -647,6 +647,7 @@ pub struct Fs {
     root: FsNode,
     working_directory: GuestPathBuf,
     home_directory: GuestPathBuf,
+    red_alert_bundle: Option<GuestPathBuf>,
 }
 impl Fs {
     /// Construct a filesystem containing a home directory for the app, its
@@ -830,6 +831,8 @@ impl Fs {
             root,
             working_directory,
             home_directory,
+            red_alert_bundle: (bundle_id == "com.ea.candcra.ipad.inc")
+                .then(|| bundle_guest_path.clone()),
         };
         assert!(fs.lookup_node(&bundle_guest_path).is_some());
         (fs, bundle_guest_path)
@@ -841,6 +844,7 @@ impl Fs {
             root: FsNode::dir(),
             working_directory: GuestPathBuf::from(String::new()),
             home_directory: GuestPathBuf::from(String::new()),
+            red_alert_bundle: None,
         }
     }
 
@@ -881,7 +885,7 @@ impl Fs {
     /// [Self::lookup_node] with a pre-resolved path.
     fn lookup_node_inner(&self, resolved_path_components: &[&str]) -> Option<&FsNode> {
         let mut node = &self.root;
-        for component in resolved_path_components {
+        for (index, component) in resolved_path_components.iter().enumerate() {
             let FsNode::Directory {
                 children,
                 writeable: _,
@@ -889,7 +893,12 @@ impl Fs {
             else {
                 return None;
             };
-            node = children.get(*component)?
+            node = children.get(Self::bundle_child_name(
+                self.red_alert_bundle.as_ref(),
+                &resolved_path_components[..index],
+                component,
+                children,
+            ))?
         }
         Some(node)
     }
@@ -908,7 +917,7 @@ impl Fs {
         let (&final_component, parent_components) = components.split_last()?;
 
         let mut parent = &mut self.root;
-        for &component in parent_components {
+        for (index, &component) in parent_components.iter().enumerate() {
             let FsNode::Directory {
                 children,
                 writeable: _,
@@ -916,10 +925,39 @@ impl Fs {
             else {
                 return None;
             };
-            parent = children.get_mut(component)?
+            let name = Self::bundle_child_name(
+                self.red_alert_bundle.as_ref(),
+                &parent_components[..index],
+                component,
+                children,
+            );
+            parent = children.get_mut(name)?
         }
 
         Some((parent, final_component.to_string()))
+    }
+
+    fn bundle_child_name<'a>(
+        red_alert_bundle: Option<&GuestPathBuf>,
+        parents: &[&str],
+        name: &'a str,
+        children: &HashMap<String, FsNode>,
+    ) -> &'a str {
+        // The iPad release opens menu/menus.bin and menu/menuWaypoints.bin,
+        // but its read-only bundle ships both files in Menu/.
+        if name == "menu"
+            && red_alert_bundle.is_some_and(|path| {
+                path.as_str()
+                    .trim_start_matches('/')
+                    .split('/')
+                    .eq(parents.iter().copied())
+            })
+            && !children.contains_key(name)
+        {
+            "Menu"
+        } else {
+            name
+        }
     }
 
     /// Like [Path::exists] but for the guest filesystem.

@@ -7,7 +7,7 @@
 
 use super::ca_layer::CALayerHostObject;
 use crate::frameworks::core_graphics::cg_affine_transform::CGAffineTransform;
-use crate::frameworks::core_graphics::{CGPoint, CGRect, CGSize};
+use crate::frameworks::core_graphics::{CGRect, CGSize};
 use crate::matrix::Matrix;
 use crate::objc::{id, msg, msg_class, objc_classes, Class, ClassExports};
 use crate::Environment;
@@ -62,6 +62,29 @@ pub struct FullscreenEaglLayer {
     pub overlays: Vec<(id, Matrix<4>)>,
 }
 
+pub(crate) fn is_red_alert_ipad(env: &Environment) -> bool {
+    const CHECKS: &[(u32, &[u8])] = &[
+        (
+            0x000c_a050,
+            &[
+                0x90, 0xb5, 0x0d, 0x4b, 0x04, 0x1c, 0x7b, 0x44, 0x0c, 0x48, 0x0d, 0x49,
+            ],
+        ),
+        (
+            0x000c_a258,
+            &[
+                0xf0, 0xb5, 0x5e, 0x46, 0x55, 0x46, 0x44, 0x46, 0x70, 0xb4, 0x40, 0x49,
+            ],
+        ),
+    ];
+    env.bundle.bundle_identifier() == "com.ea.candcra.ipad.inc"
+        && CHECKS.iter().all(|&(address, bytes)| {
+            env.mem
+                .get_bytes_fallible(crate::mem::ConstPtr::from_bits(address), bytes.len() as u32)
+                == Some(bytes)
+        })
+}
+
 /// Find an opaque `CAEAGLLayer` that covers the whole screen (possibly rotated
 /// by quarter turns), so that everything drawn before it is hidden by it. The
 /// layers drawn after it, if any, are returned as overlays.
@@ -98,6 +121,7 @@ pub fn find_fullscreen_eagl_layer_with_overlays(
 
     let root_layer: id = msg![env; top_window layer];
     let ca_eagl_layer_class: Class = msg_class![env; CAEAGLLayer class];
+    let red_alert_ipad = is_red_alert_ipad(env);
     search_for_fullscreen_eagl_layer(
         env,
         ca_eagl_layer_class,
@@ -105,6 +129,7 @@ pub fn find_fullscreen_eagl_layer_with_overlays(
         screen_bounds.size,
         Matrix::identity(),
         0,
+        red_alert_ipad,
     )
 }
 
@@ -118,6 +143,7 @@ fn search_for_fullscreen_eagl_layer(
     parent_size: CGSize,
     parent_transform: Matrix<4>,
     parent_turns: u8,
+    red_alert_ipad: bool,
 ) -> Option<FullscreenEaglLayer> {
     let host_obj: &CALayerHostObject = env.objc.borrow(layer);
 
@@ -135,20 +161,30 @@ fn search_for_fullscreen_eagl_layer(
     } else {
         parent_size
     };
-    if host_obj.bounds.size != expected_size
-        || host_obj.bounds.origin != (CGPoint { x: 0.0, y: 0.0 })
-        || host_obj.anchor_point != (CGPoint { x: 0.5, y: 0.5 })
-        || host_obj.position
-            != (CGPoint {
-                x: parent_size.width / 2.0,
-                y: parent_size.height / 2.0,
-            })
+    let geometry_eq = |a: f32, b: f32| a == b || (red_alert_ipad && (a - b).abs() <= 0.01);
+    let total_turns = (parent_turns + turns) % 4;
+    let bounds_size = host_obj.bounds.size;
+    let has_expected_size = geometry_eq(bounds_size.width, expected_size.width)
+        && geometry_eq(bounds_size.height, expected_size.height);
+    // Red Alert cancels its controller's rotation inside the GL layer.
+    // Its landscape drawable still covers the visible game viewport.
+    let red_alert_drawable = red_alert_ipad
+        && turns % 2 == 1
+        && total_turns == 0
+        && geometry_eq(bounds_size.width, parent_size.width)
+        && geometry_eq(bounds_size.height, parent_size.height);
+    if (!has_expected_size && !red_alert_drawable)
+        || !geometry_eq(host_obj.bounds.origin.x, 0.0)
+        || !geometry_eq(host_obj.bounds.origin.y, 0.0)
+        || !geometry_eq(host_obj.anchor_point.x, 0.5)
+        || !geometry_eq(host_obj.anchor_point.y, 0.5)
+        || !geometry_eq(host_obj.position.x, parent_size.width / 2.0)
+        || !geometry_eq(host_obj.position.y, parent_size.height / 2.0)
         || host_obj.hidden
         || host_obj.opacity != 1.0
     {
         return None;
     }
-    let total_turns = (parent_turns + turns) % 4;
     // Same as in composition::composite_layer_recursive.
     let transform = <Matrix<4> as From<_>>::from(host_obj.superlayer_to_layer_transform())
         .multiply(&parent_transform);
@@ -166,8 +202,12 @@ fn search_for_fullscreen_eagl_layer(
         })
         .collect();
     let opaque = host_obj.opaque;
+    let is_opaque_drawable = opaque && msg![env; layer isKindOfClass:ca_eagl_layer_class];
+    if !has_expected_size && !is_opaque_drawable {
+        return None;
+    }
 
-    if opaque && msg![env; layer isKindOfClass:ca_eagl_layer_class] {
+    if is_opaque_drawable {
         // Everything drawn after this layer is an overlay: its own sublayers.
         return Some(FullscreenEaglLayer {
             layer,
@@ -190,6 +230,7 @@ fn search_for_fullscreen_eagl_layer(
             expected_size,
             transform,
             total_turns,
+            red_alert_ipad,
         ) {
             // The sublayers above it are drawn after it.
             found.overlays.extend(

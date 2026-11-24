@@ -877,6 +877,30 @@ fn glShadeModel(env: &mut Environment, mode: GLenum) {
     with_ctx_and_mem(env, |gles, _mem| unsafe { gles.ShadeModel(mode) })
 }
 fn glScissor(env: &mut Environment, x: GLint, y: GLint, width: GLsizei, height: GLsizei) {
+    // The legacy Red Alert menu computes scissor boxes on a portrait canvas.
+    // Rescale the edges to match the landscape drawable.
+    let (x, y, width, height) = if (0..=768).contains(&x)
+        && (0..=1024).contains(&y)
+        && (0..=768 - x).contains(&width)
+        && (0..=1024 - y).contains(&height)
+        && env.cpu.regs()[14] == 0xbc2a7
+        && crate::frameworks::core_animation::ca_eagl_layer::is_red_alert_ipad(env)
+        && env
+            .mem
+            .get_bytes_fallible(crate::mem::ConstPtr::from_bits(0xbc29e), 8)
+            == Some(&[0x03, 0x9a, 0x23, 0x1c, 0x24, 0xf0, 0xbc, 0xed])
+    {
+        let left = x * 4 / 3;
+        let bottom = y * 3 / 4;
+        (
+            left,
+            bottom,
+            (x + width) * 4 / 3 - left,
+            (y + height) * 3 / 4 - bottom,
+        )
+    } else {
+        (x, y, width, height)
+    };
     {
         use std::sync::atomic::{AtomicBool, Ordering};
         static SEEN: AtomicBool = AtomicBool::new(false);
@@ -899,6 +923,20 @@ fn glScissor(env: &mut Environment, x: GLint, y: GLint, width: GLsizei, height: 
     super::p2g_wide::viewport(env, [x, y, width, height], true);
 }
 fn glViewport(env: &mut Environment, x: GLint, y: GLint, width: GLsizei, height: GLsizei) {
+    // This Red Alert landscape entry point flips the viewport against the
+    // portrait screen width, putting it 256 pixels above the drawable origin.
+    let y = if (x, y, width, height) == (0, 256, 1024, 768)
+        && env.cpu.regs()[14] == 0xbd3c7
+        && crate::frameworks::core_animation::ca_eagl_layer::is_red_alert_ipad(env)
+        && env
+            .mem
+            .get_bytes_fallible(crate::mem::ConstPtr::from_bits(0xbd3be), 8)
+            == Some(&[0x08, 0x9a, 0x43, 0x46, 0x23, 0xf0, 0x5c, 0xed])
+    {
+        0
+    } else {
+        y
+    };
     // ULTRAHLE_MINIONJUMP_VIEWPORT_BEGIN
     let (x, y, width, height) = if matches!(
         env.bundle.bundle_identifier(),

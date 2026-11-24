@@ -8,8 +8,8 @@
 use super::ui_event;
 use crate::frameworks::core_graphics::{CGPoint, CGRect};
 use crate::frameworks::foundation::{NSInteger, NSTimeInterval, NSUInteger};
-use crate::mem::GuestUSize;
 use crate::mem::MutVoidPtr;
+use crate::mem::{ConstPtr, GuestUSize};
 use crate::objc::{
     autorelease, id, msg, msg_class, nil, objc_classes, release, retain, ClassExports, HostObject,
     NSZonePtr,
@@ -134,6 +134,96 @@ struct UITouchIvars {
     touch_type: UITouchType,    // 0x3C
 }
 
+fn red_alert_touch_location(env: &Environment, view: id, location: CGPoint) -> Option<CGPoint> {
+    let window = env.window.as_ref()?;
+    if !crate::frameworks::core_animation::ca_eagl_layer::is_red_alert_ipad(env)
+        || window.current_rotation() != crate::window::DeviceOrientation::LandscapeLeft
+        || env
+            .objc
+            .get_class_name(crate::objc::ObjC::read_isa(view, &env.mem))
+            != "EAGLView"
+    {
+        return None;
+    }
+
+    // The orientation lookup and the menu touch callback are from the
+    // verified iPad 1.8.20 executable.
+    const ORIENTATION_LOOKUP: &[u8] = &[0x06, 0x4b, 0x7b, 0x44, 0x1b, 0x68, 0x1b, 0x68];
+    const CALLBACK_OFFSET: &[u8] = &[
+        0x58, 0x30, 0x9f, 0xe5, 0x03, 0x30, 0x9f, 0xe7, 0x07, 0x00, 0x53, 0xe3, 0x6f, 0x6f, 0x82,
+        0x02, 0x01, 0x60, 0x86, 0x02,
+    ];
+    let mem = &env.mem;
+    if mem.get_bytes_fallible(
+        ConstPtr::from_bits(0xc9ab4),
+        ORIENTATION_LOOKUP.len() as u32,
+    ) != Some(ORIENTATION_LOOKUP)
+        || mem.get_bytes_fallible(ConstPtr::from_bits(0x6da30), CALLBACK_OFFSET.len() as u32)
+            != Some(CALLBACK_OFFSET)
+    {
+        return None;
+    }
+    let read = |address| {
+        let bytes = mem.get_bytes_fallible(ConstPtr::from_bits(address), 4)?;
+        Some(u32::from_le_bytes(bytes.try_into().unwrap()))
+    };
+    let engine = read(read(0xf759c)?)?;
+    let display = read(engine.checked_add(28)?)?;
+    if read(display.checked_add(16)?)? != 2 {
+        return None;
+    }
+
+    let (width, _) = window.size_unrotated_unscaled();
+    // The guest rotates using a fixed 320-point height. Its menu callbacks
+    // also add 445 points when the internal display preset is 7.
+    let menu_offset = if read(0x103c9c)? == 7 { 445.0 } else { 0.0 };
+    Some(CGPoint {
+        x: location.x + 320.0 + menu_offset - width as f32,
+        y: location.y,
+    })
+}
+
+fn red_alert_hit_test(env: &mut Environment, hit: id, location: CGPoint, event: id) -> Option<id> {
+    use crate::frameworks::core_animation::ca_eagl_layer::{
+        find_fullscreen_eagl_layer_with_overlays, is_red_alert_ipad,
+    };
+    if hit == nil || !is_red_alert_ipad(env) {
+        return None;
+    }
+    let fullscreen = find_fullscreen_eagl_layer_with_overlays(env)?;
+    if !fullscreen.overlays.is_empty() {
+        return None;
+    }
+    let layer = fullscreen.layer;
+    let view: id = msg![env; layer delegate];
+    if view == nil || view == hit || red_alert_touch_location(env, view, location).is_none() {
+        return None;
+    }
+
+    // The centered GL frame fills the viewport, even where the old layer
+    // transforms make hitTest stop at the view's container.
+    let mut ancestor = view;
+    while ancestor != nil {
+        let hidden: bool = msg![env; ancestor isHidden];
+        let alpha: f32 = msg![env; ancestor alpha];
+        let interactive: bool = msg![env; ancestor isUserInteractionEnabled];
+        if hidden || alpha < 0.01 || !interactive {
+            return None;
+        }
+        if ancestor == hit {
+            let (width, _) = env.window.as_ref()?.size_unrotated_unscaled();
+            let point = CGPoint {
+                x: location.y,
+                y: width as f32 - location.x,
+            };
+            let target = msg![env; view hitTest:point withEvent:event];
+            return (target != nil).then_some(target);
+        }
+        ancestor = msg![env; ancestor superview];
+    }
+    None
+}
+
 pub type UITouchType = NSInteger;
 
 pub const CLASSES: ClassExports = objc_classes! {
@@ -163,6 +253,11 @@ pub const CLASSES: ClassExports = objc_classes! {
 
 - (CGPoint)locationInView:(id)that_view { // UIView*
     let &UITouchHostObject { location, window, .. } = env.objc.borrow(this);
+    if that_view != nil {
+        if let Some(location) = red_alert_touch_location(env, that_view, location) {
+            return location;
+        }
+    }
     let location_in_window: CGPoint = msg![env; window convertPoint:location fromWindow:nil];
     if that_view == nil {
         location_in_window
@@ -172,6 +267,11 @@ pub const CLASSES: ClassExports = objc_classes! {
 }
 - (CGPoint)previousLocationInView:(id)that_view { // UIView*
     let &UITouchHostObject { previous_location, window, .. } = env.objc.borrow(this);
+    if that_view != nil {
+        if let Some(location) = red_alert_touch_location(env, that_view, previous_location) {
+            return location;
+        }
+    }
     let location_in_window: CGPoint = msg![env; window convertPoint:previous_location fromWindow:nil];
     if that_view == nil {
         location_in_window
@@ -328,7 +428,8 @@ fn handle_touches_down(env: &mut Environment, map: HashMap<FingerId, Coords>) {
             continue;
         };
 
-        let view: id = msg![env; window hitTest:location_in_window withEvent:event];
+        let hit: id = msg![env; window hitTest:location_in_window withEvent:event];
+        let view = red_alert_hit_test(env, hit, location, event).unwrap_or(hit);
         if view == nil {
             log!(
                 "Couldn't find a view for touch at {:?} in window {:?}, discarding",
