@@ -2309,6 +2309,9 @@ fn glDrawArrays(env: &mut Environment, mode: GLenum, first: GLint, count: GLsize
         warn_invalid_draw_mode("glDrawArrays", mode);
         return;
     }
+    if super::p2g_wide::skip_glare(env, mode, first, count) {
+        return;
+    }
     super::p2g_wide::apply(env, false);
     let programmable = is_programmable(env);
     let offset = if programmable {

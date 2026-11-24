@@ -361,6 +361,112 @@ pub fn apply(env: &mut Environment, clear: bool) {
         }
     });
 }
+/// Skip P2G 1.00.02's screen-space white glare in expanded view. The game
+/// blends it over the original 16:9 region after drawing the wider scene.
+pub fn skip_glare(env: &mut Environment, mode: u32, first: i32, count: i32) -> bool {
+    const DRAW_RETURN: u32 = 0x2a1401;
+    const DRAW_SITE: &[u8] = &[
+        0xe1, 0xf0, 0xed, 0xfd, 0xda, 0xf8, 0x00, 0x20, 0xd5, 0xf8, 0x80, 0x10, 0x92, 0xb2, 0xe1,
+        0xf0, 0x82, 0xfc, 0x30, 0xe0,
+    ];
+    if !env.options.p2g_wide_screen
+        || (mode, first, count) != (gl::TRIANGLE_STRIP, 0, 4)
+        || env.cpu.regs()[14] != DRAW_RETURN
+        || env.bundle.bundle_identifier() != "jp.co.capcom.mhp2gjp"
+        || env
+            .mem
+            .get_bytes_fallible(ConstPtr::from_bits(0x2a13ee), DRAW_SITE.len() as u32)
+            != Some(DRAW_SITE)
+    {
+        return false;
+    }
+    let Some((ctx, dims, world)) = size(env) else {
+        return false;
+    };
+    let viewport = env.framework_state.opengles.p2g_wide.contexts[&ctx].viewport;
+    if world || viewport != Some([0, 0, dims.guest.0, dims.guest.1]) {
+        return false;
+    }
+
+    // The same draw site also submits HUD geometry. Inspect the actual
+    // client arrays, which may differ from the software VAO's shadow.
+    let program = env.framework_state.opengles.p2g_wide.contexts[&ctx].program;
+    with_ctx_and_mem(env, |gles, mem| unsafe {
+        if gles.IsEnabled(gl::BLEND) == 0
+            || gles.GetAttribLocation(program, c"a_texCoord".as_ptr()) >= 0
+        {
+            return false;
+        }
+        let position = gles.GetAttribLocation(program, c"a_position".as_ptr());
+        let color = gles.GetAttribLocation(program, c"a_color".as_ptr());
+        let Some(position) = glare_array_pointer(gles, position, gl::SHORT) else {
+            return false;
+        };
+        let Some(color) = glare_array_pointer(gles, color, gl::UNSIGNED_BYTE) else {
+            return false;
+        };
+        if (color as usize).checked_add(4) != Some(position as usize)
+            || !mem.is_host_ptr_in_guest_mem(color)
+        {
+            return false;
+        }
+        let skip = mem
+            .get_bytes_fallible(mem.host_ptr_to_guest_ptr(color), 48)
+            .is_some_and(|vertices| is_glare_quad(vertices, dims.guest));
+        if skip {
+            static LOGGED: std::sync::Once = std::sync::Once::new();
+            LOGGED.call_once(|| log!("P2G expanded view: skipping the screen-space glare quad."));
+        }
+        skip
+    })
+}
+
+unsafe fn glare_array_pointer(
+    gles: &mut dyn crate::gles::GLES,
+    location: i32,
+    element_type: u32,
+) -> Option<*mut std::ffi::c_void> {
+    let index = u32::try_from(location).ok()?;
+    let mut layout = [0; 5];
+    for (value, pname) in layout.iter_mut().zip([
+        0x8622, // GL_VERTEX_ATTRIB_ARRAY_ENABLED
+        0x8623, // GL_VERTEX_ATTRIB_ARRAY_SIZE
+        0x8625, // GL_VERTEX_ATTRIB_ARRAY_TYPE
+        0x8624, // GL_VERTEX_ATTRIB_ARRAY_STRIDE
+        0x889f, // GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING
+    ]) {
+        gles.GetVertexAttribiv(index, pname, value);
+    }
+    if layout != [1, 4, element_type as i32, 12, 0] {
+        return None;
+    }
+    let mut pointer = std::ptr::null_mut();
+    gles.GetVertexAttribPointerv(
+        index,
+        0x8645, /* GL_VERTEX_ATTRIB_ARRAY_POINTER */
+        &mut pointer,
+    );
+    Some(pointer)
+}
+
+fn is_glare_quad(vertices: &[u8], (width, height): (i32, i32)) -> bool {
+    if vertices.len() != 48 || !(1..=64).contains(&vertices[3]) {
+        return false;
+    }
+    let top_alpha = vertices[3];
+    let corners = [(0, 0), (width, 0), (0, height), (width, height)];
+    vertices
+        .chunks_exact(12)
+        .zip(corners)
+        .zip([top_alpha, top_alpha, 0, 0])
+        .all(|((v, (x, y)), alpha)| {
+            v[..4] == [255, 255, 255, alpha]
+                && i32::from(i16::from_le_bytes([v[4], v[5]])) == x
+                && i32::from(i16::from_le_bytes([v[6], v[7]])) == y
+                && v[8..] == [0; 4]
+        })
+}
+
 pub fn delete_program(env: &mut Environment, program: u32) {
     if let Some((_, share)) = key(env) {
         env.framework_state
@@ -420,6 +526,21 @@ mod tests {
         assert!(!widen_projection(&mut ortho, dims));
         assert_eq!(ortho, original);
     }
+    #[test]
+    fn glare_filter_preserves_hud_and_full_screen_fades() {
+        let dims = (1136, 640);
+        let mut quad = [
+            255, 255, 255, 29, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 29, 112, 4, 0, 0, 0, 0, 0, 0,
+            255, 255, 255, 0, 0, 0, 128, 2, 0, 0, 0, 0, 255, 255, 255, 0, 112, 4, 128, 2, 0, 0, 0,
+            0,
+        ];
+        assert!(is_glare_quad(&quad, dims));
+        assert!(!is_glare_quad(&quad, (568, 320)));
+        quad[27] = 29;
+        quad[39] = 29;
+        assert!(!is_glare_quad(&quad, dims));
+    }
+
     #[test]
     fn depth_texture_matches_color_without_expanding_shadow_or_image_textures() {
         let o = crate::options::Options {
