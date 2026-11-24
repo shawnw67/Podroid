@@ -1,0 +1,28 @@
+{
+  "based_on": "Podroid_Adaptive_Icons_Final_20261102.zip",
+  "foreground_scale_relative_to_previous": 0.9,
+  "old_png_bbox_rgba_alpha_px": [
+    336,
+    223,
+    788,
+    860
+  ],
+  "new_png_bbox_rgba_alpha_px": [
+    357,
+    255,
+    763,
+    828
+  ],
+  "adaptive_viewport_dp": 108,
+  "vector_transform": {
+    "scale": 0.075942018,
+    "translate_x": 6.250697666999999,
+    "translate_y": 6.835289246999999
+  },
+  "colors": {
+    "green": "#3DDC84",
+    "navy": "#19243D",
+    "white": "#FFFFFF"
+  },
+  "standalone_brand_logo": "unchanged"
+}

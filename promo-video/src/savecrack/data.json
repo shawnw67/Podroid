@@ -1,0 +1,161 @@
+{
+ "fileSize": 1483024,
+ "hexWall": [
+  "0C D4 27 37 CD D6 F3 5A 2D 12 28 81 6E F2 F7 88",
+  "99 F5 71 1F F5 87 1E F0 57 7E 92 32 A9 DA 6D 87",
+  "EA 58 06 2E F8 A4 7E 8B 14 11 21 FF 29 5F 66 A9",
+  "B3 99 C4 1E 1A 3B 53 21 24 D7 FA 15 C7 90 38 D9",
+  "03 11 C7 30 3B 0A F5 D5 70 1F 3F CC 10 C7 08 3B",
+  "65 94 1F DB EB A9 23 C5 65 59 B1 B7 27 8F FB D6",
+  "37 EF 00 E0 4A 12 40 F4 C1 DF FD 50 9F 9B B9 5D",
+  "88 D2 E3 E2 5C 36 21 D5 8A E3 3F E1 FF E8 0C 66",
+  "9E 2A EA 31 83 87 20 74 2B 66 F5 E4 34 58 FA F6",
+  "84 FD FE 1D 6C 00 51 E8 51 5E D0 40 C2 54 D9 A1",
+  "02 A4 17 F5 9D FF 6C B1 C7 41 4D C1 07 E8 A4 C5",
+  "6E C5 09 3B 83 16 43 E7 9A 77 21 68 E1 12 F7 09",
+  "5C 6D 8A D1 89 17 80 1A 54 B8 F8 77 7F 0D B7 29",
+  "0E 0D EE 70 43 CE BC 1F 0B 42 7D 4D BA 37 C0 F1",
+  "76 08 4E DA 75 6E 3F A7 F1 98 A1 CB 21 DC 7D 52",
+  "F5 6A 2D 95 E9 91 60 52 C9 29 3B 41 25 3A F5 E7",
+  "F9 0F 1B 01 8D 1B 26 5A F6 74 A3 B3 8D 56 85 33",
+  "00 FF F6 9E 5B F1 8C 70 1C 02 E9 89 A8 50 EA D5",
+  "04 8C 64 38 14 8E 39 DA C2 5E 96 4C 5E 0D 43 25",
+  "55 53 BE A0 87 88 5F EC 54 70 92 BC BC CC 77 EA",
+  "56 98 07 B8 22 CA 0E 2E 94 7E 00 0A 71 96 CF BA",
+  "97 B3 E6 1E E6 6D AD 37 A2 E9 CF 25 F2 EA BC 13",
+  "F1 E2 8F 19 C2 9C 66 8B 32 B3 F7 CB 03 19 8B 4E",
+  "06 3E 2D 74 D6 5C 22 EA D2 B1 B9 E8 09 72 8C A1",
+  "DB F7 60 88 C7 36 7B 6B 53 B2 70 88 BD DE DA ED",
+  "6D CD 38 7C BE 44 43 21 EE 3D D2 1A 24 5B 1A BA",
+  "DA 92 72 D6 F9 BD 8D 32 9F 69 F1 4F FC 8C C7 C7",
+  "48 22 0D 6A CC 97 15 71 E6 98 5A CD ED 03 07 DC",
+  "CF A2 D4 91 89 A9 16 A0 5C 93 40 73 4D 6D 80 AA",
+  "B4 F4 CD 3A F9 D4 45 81 43 8C 9D C6 B3 5A 43 56",
+  "F8 8A 64 75 23 1E 12 EF D2 C9 6C EA A0 B1 B4 83",
+  "8E DC BB 22 BD BE F9 AA 90 5B 3D 20 0C 08 34 4A",
+  "9D CE 38 5B 87 F3 C3 76 20 EB 83 95 4D DC A1 59",
+  "D2 E7 59 02 63 A3 E7 A8 1E C4 FD BA 9B 7A 46 92",
+  "F3 E1 E9 5C 0D B8 18 2A 9A 65 A5 B2 93 33 BC 45",
+  "B2 37 51 C9 4B E7 B4 DF DB 82 4B CA 81 4B 00 88",
+  "F5 71 3E 76 19 72 6D 4D B6 FC 04 AB 09 2C 05 BD",
+  "76 8E 43 AD 32 2F 24 FF E5 FF 21 14 C1 56 FD 46",
+  "70 A0 15 9C 56 72 E2 A1 34 01 F3 F4 3C CA B1 CA",
+  "CE C4 9C F3 C5 8B B2 D0 B9 A1 31 FE B0 0E 81 B2"
+ ],
+ "checkCode": [
+  {
+   "address": "322790",
+   "op": "str",
+   "args": "r1, [r4, r0]"
+  },
+  {
+   "address": "322792",
+   "op": "movw",
+   "args": "r1, #0xa0f0"
+  },
+  {
+   "address": "322796",
+   "op": "movt",
+   "args": "r1, #0x16"
+  },
+  {
+   "address": "32279a",
+   "op": "mov",
+   "args": "r0, r4"
+  },
+  {
+   "address": "32279c",
+   "op": "vst1.8",
+   "args": "{d16, d17}, [r6]"
+  },
+  {
+   "address": "3227a0",
+   "op": "bl",
+   "args": "0x2b0b8c"
+  },
+  {
+   "address": "3227a4",
+   "op": "movw",
+   "args": "r1, #0xa0fc"
+  },
+  {
+   "address": "3227a8",
+   "op": "ldr",
+   "args": "r0, [sp, #0x30]"
+  },
+  {
+   "address": "3227aa",
+   "op": "movt",
+   "args": "r1, #0x16"
+  },
+  {
+   "address": "3227ae",
+   "op": "vld1.32",
+   "args": "{d16, d17}, [r8]"
+  },
+  {
+   "address": "3227b2",
+   "op": "movs",
+   "args": "r2, #0x14"
+  },
+  {
+   "address": "3227b4",
+   "op": "vld1.32",
+   "args": "{d18, d19}, [r11]"
+  },
+  {
+   "address": "3227b8",
+   "op": "str",
+   "args": "r0, [r4, r1]"
+  },
+  {
+   "address": "3227ba",
+   "op": "add.w",
+   "args": "r1, r11, #0xc"
+  },
+  {
+   "address": "3227be",
+   "op": "add",
+   "args": "r0, sp, #0x34"
+  },
+  {
+   "address": "3227c0",
+   "op": "vst1.32",
+   "args": "{d16, d17}, [r5]"
+  },
+  {
+   "address": "3227c4",
+   "op": "vst1.32",
+   "args": "{d18, d19}, [r6]"
+  },
+  {
+   "address": "3227c8",
+   "op": "blx",
+   "args": "0x3b5fbc"
+  },
+  {
+   "address": "3227cc",
+   "op": "mov",
+   "args": "r1, r0"
+  },
+  {
+   "address": "3227ce",
+   "op": "movs",
+   "args": "r0, #0x0"
+  },
+  {
+   "address": "3227d0",
+   "op": "cmp",
+   "args": "r1, #0x0"
+  },
+  {
+   "address": "3227d2",
+   "op": "bne",
+   "args": "0x322852"
+  }
+ ],
+ "moneyBefore": "02 00 00 00",
+ "moneyAfter": "79 01 00 00",
+ "moneyBeforeValue": 2,
+ "moneyAfterValue": 377
+}

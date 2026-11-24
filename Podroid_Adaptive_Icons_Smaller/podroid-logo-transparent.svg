@@ -1,0 +1,14 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1254" height="1254" viewBox="0 0 1254 1254" role="img" aria-labelledby="podroid-title">
+  <title id="podroid-title">Podroid</title>
+  
+  <title>Podroid logo</title>
+  <desc>White i with Apple-inspired leaf and Android-green P-shaped D with two circular eye cutouts and detached antennae.</desc>
+  <g id="podroid-mark" transform="translate(0 29.627867)">
+    <path id="ios-stem" fill="#FFFFFF" d="M 388.5 397.5 H 517.5 V 999.5 H 388.5 Z"/>
+    <path id="ios-leaf" fill="#FFFFFF" d="M 388 379 C 384 318 437 256 517.5 246.5 C 520 313 467 376 388 379 Z"/>
+    <g id="android-d-with-eyes-and-antennas" transform="translate(-7.5 0)"><path id="android-d" fill="#3DDC84" fill-rule="evenodd" d="M 538 246 H 620 C 796 246 879 413 879 527 C 879 733 703 801 613 801 H 538 V 673 H 584 C 655 673 711 609 711 527 C 711 445 658 380 580 380 H 538 Z M 794.0 445.5 A 30.5 30.5 0 1 0 733.0 445.5 A 30.5 30.5 0 1 0 794.0 445.5 Z M 794.0 616.5 A 30.5 30.5 0 1 0 733.0 616.5 A 30.5 30.5 0 1 0 794.0 616.5 Z"/>
+    <path id="antenna-top" d="M 873.5 387 L 912.5 357" fill="none" stroke="#3DDC84" stroke-width="33" stroke-linecap="round"/>
+    <path id="antenna-bottom" d="M 873.5 668 L 912.5 699" fill="none" stroke="#3DDC84" stroke-width="33" stroke-linecap="round"/>
+  </g></g>
+</svg>
