@@ -37,6 +37,8 @@ use std::ffi::OsStr;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 
+const PODROID_ICON: &[u8] = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/icon_uf.png"));
+
 struct AppInfo {
     path: PathBuf,
     display_name: String,
@@ -310,15 +312,7 @@ fn show_app_picker_gui(
     apps: Result<Vec<AppInfo>, String>,
 ) -> Result<(PathBuf, Vec<String>), String> {
     let icon = {
-        let bytes: &[u8] = match crate::branding() {
-            "" => include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/icon.png")),
-            "UF" => include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/icon_uf.png")),
-            "PREVIEW" => {
-                include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/icon_preview.png"))
-            }
-            _ => panic!(),
-        };
-        let mut image = Image::from_bytes(bytes).unwrap();
+        let mut image = Image::from_bytes(PODROID_ICON).unwrap();
         // should match Bundle::load_icon()
         image.round_corners(
             (10.0 / 57.0) * (image.dimensions().0 as f32),
@@ -420,14 +414,7 @@ fn app_picker_inner(
 
     // Header: icon, name and a hint
     {
-        let icon_bytes: &[u8] = match crate::branding() {
-            "UF" => include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/icon_uf.png")),
-            "PREVIEW" => {
-                include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/icon_preview.png"))
-            }
-            _ => include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/res/icon.png")),
-        };
-        let mut icon = Image::from_bytes(icon_bytes).unwrap();
+        let mut icon = Image::from_bytes(PODROID_ICON).unwrap();
         icon.round_corners(
             (10.0 / 57.0) * (icon.dimensions().0 as f32),
             /* four_corners: */ true,

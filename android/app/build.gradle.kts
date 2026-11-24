@@ -33,10 +33,6 @@ fun getTouchHLEVersionName(): String {
     return runTouchHLEVersionTool(/* wantBranding: */ false)
 }
 
-fun join(prefix: String, separator: String, branding: String): String {
-    return if (branding.isEmpty()) prefix else prefix + separator + branding
-}
-
 android {
     // NDK r28+ links 64-bit ELF LOAD segments aligned to 16 KB by default,
     // which is required on Android devices with a 16 KB page size. Older NDKs
@@ -61,13 +57,7 @@ android {
         }
         resValue("string", "app_name", "Podroid")
         buildConfigField("String", "APP_NAME", "\"Podroid\"")
-        val icon = if (branding == "UF") "@mipmap/ic_launcher"
-            else join("@drawable/icon", "_", branding.lowercase())
-        manifestPlaceholders["icon"] = icon
-        manifestPlaceholders["roundIcon"] =
-            if (branding == "UF") "@mipmap/ic_launcher_round" else icon
-        buildConfigField("int", "APP_ICON", if (branding == "UF") "R.mipmap.ic_launcher"
-            else join("R.drawable.icon", "_", branding.lowercase()))
+        buildConfigField("int", "APP_ICON", "R.mipmap.ic_launcher")
         versionName = getTouchHLEVersionName()
 
         minSdk = 29 // Android 10
