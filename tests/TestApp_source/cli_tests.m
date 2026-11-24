@@ -3957,6 +3957,13 @@ int test_vsnprintf() {
     return -1001;
   }
   free(str);
+  // P2G's skill points put the sign flag after the field width.
+  str = str_format("[%3+d][%3+d][%3+d][%3+d][%d]", 3, 0, -2, 123, 7);
+  if (strcmp(str, "[ +3][ +0][ -2][+123][7]") != 0) {
+    free(str);
+    return -1004;
+  }
+  free(str);
   // Zero padding follows the sign, including zero and negative values.
   str = str_format("[%+08d][%05d]", 0, -12);
   if (strcmp(str, "[+0000000][-0012]") != 0) {

@@ -144,6 +144,18 @@ pub fn printf_inner<const NS_LOG: bool, F: Fn(&Mem, GuestUSize) -> u8>(
         };
         assert!(pad_width >= 0); // TODO: Implement right-padding
 
+        // Darwin accepts a late sign flag for signed decimal conversions.
+        // P2G formats skill points with %3+d, alongside standard %+3d.
+        let prepend_sign = if pad_width > 0
+            && get_format_char(&env.mem, format_char_idx) == b'+'
+            && matches!(get_format_char(&env.mem, format_char_idx + 1), b'd' | b'i')
+        {
+            format_char_idx += 1;
+            true
+        } else {
+            prepend_sign
+        };
+
         let precision = if get_format_char(&env.mem, format_char_idx) == b'.' {
             format_char_idx += 1;
             let precision = if get_format_char(&env.mem, format_char_idx) == b'*' {
