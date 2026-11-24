@@ -43,3 +43,8 @@ touchHLE_log_previous.txt
 touchHLE_wallpaper.*
 touchHLE_quick_options.txt
 /touchHLE_UF_*.apk
+
+# Build outputs & release artifacts (never commit binaries)
+*.apk
+*.zip
+/touchHLE_sqlite
